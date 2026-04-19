@@ -1,0 +1,328 @@
+import { useState, useCallback, useEffect } from "react";
+import { ScrollView, Text, View, TextInput, Switch, Pressable, StyleSheet, Platform, Alert } from "react-native";
+import * as Haptics from "expo-haptics";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { ScreenContainer } from "@/components/screen-container";
+import { useBotContext, BotConfig, DEFAULT_CONFIG } from "@/lib/bot-context";
+import { tgTestConnection } from "@/lib/telegram";
+
+const PRESETS: Record<string, { sz: number; lv: number; tp: number; sl: number }> = {
+  low: { sz: 10, lv: 3, tp: 0.3, sl: 0.15 },
+  med: { sz: 20, lv: 5, tp: 0.5, sl: 0.25 },
+  high: { sz: 50, lv: 10, tp: 1.0, sl: 0.5 },
+};
+
+function SectionTitle({ title }: { title: string }) {
+  return <Text style={styles.sectionTitle}>{title}</Text>;
+}
+
+function ToggleRow({ label, subtitle, value, onValueChange }: { label: string; subtitle?: string; value: boolean; onValueChange: (v: boolean) => void }) {
+  return (
+    <View style={styles.toggleRow}>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.toggleLabel}>{label}</Text>
+        {subtitle ? <Text style={styles.toggleSub}>{subtitle}</Text> : null}
+      </View>
+      <Switch
+        value={value}
+        onValueChange={(v) => {
+          if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          onValueChange(v);
+        }}
+        trackColor={{ false: "#121a2e", true: "rgba(0,245,160,0.18)" }}
+        thumbColor={value ? "#00f5a0" : "#3d5470"}
+      />
+    </View>
+  );
+}
+
+function InputField({ label, value, onChangeText, placeholder, secureTextEntry, keyboardType, hint }: {
+  label: string; value: string; onChangeText: (t: string) => void; placeholder?: string; secureTextEntry?: boolean; keyboardType?: any; hint?: string;
+}) {
+  return (
+    <View style={styles.fieldGroup}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <TextInput
+        style={styles.fieldInput}
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor="#3d5470"
+        secureTextEntry={secureTextEntry}
+        keyboardType={keyboardType}
+        autoCapitalize="none"
+        autoCorrect={false}
+      />
+      {hint ? <Text style={styles.fieldHint}>{hint}</Text> : null}
+    </View>
+  );
+}
+
+export default function SettingsScreen() {
+  const { state, saveConfig } = useBotContext();
+  const [form, setForm] = useState<BotConfig>({ ...state.config });
+  const [testingTg, setTestingTg] = useState(false);
+
+  useEffect(() => {
+    setForm({ ...state.config });
+  }, [state.config]);
+
+  const update = useCallback((key: keyof BotConfig, value: any) => {
+    setForm(prev => ({ ...prev, [key]: value }));
+  }, []);
+
+  const updatePair = useCallback((key: keyof BotConfig["p"], value: boolean) => {
+    setForm(prev => ({ ...prev, p: { ...prev.p, [key]: value } }));
+  }, []);
+
+  const handleSave = useCallback(async () => {
+    if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    await saveConfig(form);
+  }, [form, saveConfig]);
+
+  const handlePreset = useCallback((name: string) => {
+    const p = PRESETS[name];
+    if (!p) return;
+    if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setForm(prev => ({ ...prev, sz: p.sz, lv: p.lv, tp: p.tp, sl: p.sl }));
+  }, []);
+
+  const handleTestTg = useCallback(async () => {
+    if (!form.tgt || !form.tgc) return;
+    setTestingTg(true);
+    const ok = await tgTestConnection(form.tgt, form.tgc);
+    setTestingTg(false);
+    if (ok) {
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      if (Platform.OS === "web") alert("Sent! Check Telegram");
+      else Alert.alert("Success", "Sent! Check Telegram");
+    } else {
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      if (Platform.OS === "web") alert("Failed to send test message");
+      else Alert.alert("Error", "Failed to send test message");
+    }
+  }, [form.tgt, form.tgc]);
+
+  const handleReset = useCallback(() => {
+    const doReset = async () => {
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      await AsyncStorage.clear();
+      setForm({ ...DEFAULT_CONFIG });
+      await saveConfig(DEFAULT_CONFIG);
+    };
+    if (Platform.OS === "web") {
+      if (confirm("Reset all data and settings?")) doReset();
+    } else {
+      Alert.alert("Reset App", "Reset all data and settings?", [
+        { text: "Cancel", style: "cancel" },
+        { text: "Reset", style: "destructive", onPress: doReset },
+      ]);
+    }
+  }, [saveConfig]);
+
+  return (
+    <ScreenContainer containerClassName="bg-background">
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Settings</Text>
+      </View>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 14, paddingBottom: 120, paddingTop: 12 }}>
+        {/* AI Brain */}
+        <View style={styles.card}>
+          <SectionTitle title="AI BRAIN" />
+          <InputField
+            label="Groq API Key *"
+            value={form.groq}
+            onChangeText={(t) => update("groq", t)}
+            placeholder="gsk_xxxx"
+            secureTextEntry
+            hint="Free at console.groq.com — powers all AI decisions"
+          />
+        </View>
+
+        {/* Trading Mode */}
+        <View style={styles.card}>
+          <SectionTitle title="TRADING MODE" />
+          <ToggleRow
+            label="Paper Trading"
+            subtitle="Simulate trades without real money"
+            value={form.paper}
+            onValueChange={(v) => update("paper", v)}
+          />
+          {!form.paper && (
+            <View style={{ marginTop: 8 }}>
+              <InputField
+                label="Bybit API Key"
+                value={form.key === "PAPER_MODE" ? "" : form.key}
+                onChangeText={(t) => update("key", t)}
+                placeholder="Your Bybit API key"
+              />
+              <InputField
+                label="Bybit API Secret"
+                value={form.secret === "PAPER_MODE" ? "" : form.secret}
+                onChangeText={(t) => update("secret", t)}
+                placeholder="Your Bybit API secret"
+                secureTextEntry
+              />
+              <ToggleRow
+                label="Testnet Mode"
+                subtitle="Use Bybit testnet (no real funds)"
+                value={form.testnet}
+                onValueChange={(v) => update("testnet", v)}
+              />
+            </View>
+          )}
+        </View>
+
+        {/* Telegram */}
+        <View style={styles.card}>
+          <SectionTitle title="TELEGRAM ALERTS" />
+          <InputField
+            label="Bot Token"
+            value={form.tgt}
+            onChangeText={(t) => update("tgt", t)}
+            placeholder="From @BotFather"
+          />
+          <InputField
+            label="Chat ID"
+            value={form.tgc}
+            onChangeText={(t) => update("tgc", t)}
+            placeholder="From @userinfobot"
+          />
+          <Pressable
+            onPress={handleTestTg}
+            style={({ pressed }) => [styles.testBtn, pressed && { opacity: 0.7 }]}
+          >
+            <Text style={styles.testBtnText}>{testingTg ? "SENDING..." : "TEST CONNECTION"}</Text>
+          </Pressable>
+        </View>
+
+        {/* Trading Pairs */}
+        <View style={styles.card}>
+          <SectionTitle title="TRADING PAIRS" />
+          <ToggleRow label="BTC/USDT Spot" value={form.p.bs} onValueChange={(v) => updatePair("bs", v)} />
+          <ToggleRow label="ETH/USDT Spot" value={form.p.es} onValueChange={(v) => updatePair("es", v)} />
+          <ToggleRow label="BTC/USDT Futures" value={form.p.bf} onValueChange={(v) => updatePair("bf", v)} />
+          <ToggleRow label="ETH/USDT Futures" value={form.p.ef} onValueChange={(v) => updatePair("ef", v)} />
+        </View>
+
+        {/* Risk Parameters */}
+        <View style={styles.card}>
+          <SectionTitle title="RISK PARAMETERS" />
+          <View style={styles.presetRow}>
+            {["low", "med", "high"].map((p) => (
+              <Pressable
+                key={p}
+                onPress={() => handlePreset(p)}
+                style={({ pressed }) => [styles.presetBtn, pressed && { opacity: 0.7 }]}
+              >
+                <Text style={styles.presetBtnText}>{p.toUpperCase()}</Text>
+              </Pressable>
+            ))}
+          </View>
+          <View style={styles.fieldRow}>
+            <View style={{ flex: 1 }}>
+              <InputField
+                label="Order Size (USDT)"
+                value={String(form.sz)}
+                onChangeText={(t) => update("sz", +t || 0)}
+                keyboardType="numeric"
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <InputField
+                label="Max Open Trades"
+                value={String(form.mx)}
+                onChangeText={(t) => update("mx", +t || 0)}
+                keyboardType="numeric"
+              />
+            </View>
+          </View>
+          <View style={styles.fieldRow}>
+            <View style={{ flex: 1 }}>
+              <InputField
+                label="Take Profit %"
+                value={String(form.tp)}
+                onChangeText={(t) => update("tp", +t || 0)}
+                keyboardType="numeric"
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <InputField
+                label="Stop Loss %"
+                value={String(form.sl)}
+                onChangeText={(t) => update("sl", +t || 0)}
+                keyboardType="numeric"
+              />
+            </View>
+          </View>
+          <InputField
+            label="Futures Leverage"
+            value={String(form.lv)}
+            onChangeText={(t) => update("lv", +t || 0)}
+            keyboardType="numeric"
+            hint="Recommended: 3-5x for small accounts"
+          />
+          <InputField
+            label="Min AI Confidence % to trade"
+            value={String(form.mc)}
+            onChangeText={(t) => update("mc", +t || 0)}
+            keyboardType="numeric"
+            hint="Higher = fewer but more confident trades"
+          />
+        </View>
+
+        {/* Save Button */}
+        <Pressable
+          onPress={handleSave}
+          style={({ pressed }) => [styles.saveBtn, pressed && { opacity: 0.9, transform: [{ scale: 0.97 }] }]}
+        >
+          <Text style={styles.saveBtnText}>SAVE SETTINGS</Text>
+        </Pressable>
+
+        {/* Danger Zone */}
+        <View style={[styles.card, { borderColor: "rgba(255,64,96,0.2)", marginTop: 10 }]}>
+          <SectionTitle title="DANGER ZONE" />
+          <Pressable
+            onPress={handleReset}
+            style={({ pressed }) => [styles.resetBtn, pressed && { opacity: 0.7 }]}
+          >
+            <Text style={styles.resetBtnText}>RESET ALL DATA</Text>
+          </Pressable>
+        </View>
+      </ScrollView>
+    </ScreenContainer>
+  );
+}
+
+const styles = StyleSheet.create({
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#1a2d48",
+    backgroundColor: "rgba(4,8,15,0.95)",
+  },
+  headerTitle: { fontWeight: "800", fontSize: 17, color: "#daeaf8" },
+  card: { backgroundColor: "#080d18", borderWidth: 1, borderColor: "#1a2d48", borderRadius: 12, padding: 14, marginBottom: 10 },
+  sectionTitle: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 8, fontWeight: "700", color: "#3d5470", letterSpacing: 2.5, textTransform: "uppercase", marginBottom: 11 },
+  fieldGroup: { marginBottom: 11 },
+  fieldLabel: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 8, color: "#3d5470", letterSpacing: 2, textTransform: "uppercase", marginBottom: 5 },
+  fieldInput: { width: "100%", backgroundColor: "#0d1422", borderWidth: 1, borderColor: "#1a2d48", borderRadius: 8, paddingHorizontal: 13, paddingVertical: 11, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 12, color: "#daeaf8" },
+  fieldHint: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 8, color: "#3d5470", marginTop: 3, lineHeight: 12 },
+  fieldRow: { flexDirection: "row", gap: 8 },
+  toggleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: "#1a2d48" },
+  toggleLabel: { fontSize: 13, fontWeight: "700", color: "#daeaf8" },
+  toggleSub: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 9, color: "#3d5470", marginTop: 1 },
+  presetRow: { flexDirection: "row", gap: 8, marginBottom: 12 },
+  presetBtn: { flex: 1, backgroundColor: "#0d1422", borderWidth: 1, borderColor: "#1a2d48", borderRadius: 8, paddingVertical: 10, alignItems: "center" },
+  presetBtnText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 11, fontWeight: "700", color: "#9ab3ce", letterSpacing: 1 },
+  testBtn: { backgroundColor: "rgba(61,155,255,0.1)", borderWidth: 1, borderColor: "rgba(61,155,255,0.3)", borderRadius: 8, paddingVertical: 10, alignItems: "center", marginTop: 4 },
+  testBtnText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 10, fontWeight: "700", color: "#3d9bff", letterSpacing: 1 },
+  saveBtn: { backgroundColor: "#00f5a0", borderRadius: 10, paddingVertical: 14, alignItems: "center", marginTop: 4 },
+  saveBtnText: { fontSize: 16, fontWeight: "800", color: "#000", letterSpacing: 1, textTransform: "uppercase" },
+  resetBtn: { backgroundColor: "rgba(255,64,96,0.1)", borderWidth: 1, borderColor: "rgba(255,64,96,0.3)", borderRadius: 8, paddingVertical: 10, alignItems: "center" },
+  resetBtnText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 10, fontWeight: "700", color: "#ff4060", letterSpacing: 1 },
+});

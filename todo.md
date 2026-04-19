@@ -1,0 +1,22 @@
+# ByteBot AI — TODO
+
+- [x] Configure dark theme colors (ByteBot brand palette)
+- [x] Update tab bar with correct icons and screens
+- [x] Create bot state management (context/store)
+- [x] Create indicator calculation utilities (EMA, RSI, MACD, ADX, Bollinger)
+- [x] Create Bybit API service (public + authenticated)
+- [x] Create Groq AI service
+- [x] Create Telegram notification service
+- [x] Create AsyncStorage persistence layer
+- [ ] Implement Setup Wizard screen (first-run onboarding)
+- [x] Implement Dashboard screen (stats, tickers, AI decisions, news)
+- [x] Implement Positions screen
+- [x] Implement Trade Log screen
+- [x] Implement Settings screen
+- [x] Implement bot start/stop logic with 45s scan interval
+- [x] Implement paper trading mode (simulate TP/SL)
+- [x] Implement live trading mode (real Bybit orders)
+- [x] Generate app logo and update branding
+- [x] Fix TypeScript errors (storageProxy.ts)
+- [x] Write and pass unit tests for indicators
+- [ ] Final testing and checkpoint
