@@ -45,8 +45,8 @@ export function getApiBaseUrl(): string {
     }
   }
 
-  // Fallback to empty (will use relative URL)
-  return "";
+  // Fallback to Render server URL for production
+  return "https://bytebot-ai.onrender.com";
 }
 
 export const SESSION_TOKEN_KEY = "app_session_token";
