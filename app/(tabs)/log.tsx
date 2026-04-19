@@ -1,9 +1,8 @@
 import { useCallback } from "react";
-import { ScrollView, Text, View, Pressable, StyleSheet, Platform, Alert } from "react-native";
+import { ScrollView, Text, View, Pressable, StyleSheet, Platform, Alert, ActivityIndicator } from "react-native";
 import * as Haptics from "expo-haptics";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ScreenContainer } from "@/components/screen-container";
-import { useBotContext } from "@/lib/bot-context";
+import { trpc } from "@/lib/trpc";
 
 function LogItem({ trade }: { trade: any }) {
   const pnl = +trade.pnl;
@@ -33,31 +32,41 @@ function LogItem({ trade }: { trade: any }) {
 }
 
 export default function LogScreen() {
-  const { state, dispatch } = useBotContext();
-  const { tradeLog, stats } = state;
+  const { data: snapshot, isLoading } = trpc.bot.snapshot.useQuery(undefined, {
+    refetchInterval: 3000,
+    refetchIntervalInBackground: true,
+  });
+  const clearLogMutation = trpc.bot.clearLog.useMutation();
 
   const handleClear = useCallback(() => {
+    const doIt = () => {
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      clearLogMutation.mutate();
+    };
     if (Platform.OS === "web") {
-      if (confirm("Clear all trade history?")) {
-        dispatch({ type: "CLEAR_TRADE_LOG" });
-        AsyncStorage.removeItem("bbg5_log");
-      }
+      if (confirm("Clear all trade history?")) doIt();
     } else {
       Alert.alert("Clear Log", "Clear all trade history?", [
         { text: "Cancel", style: "cancel" },
-        {
-          text: "Clear",
-          style: "destructive",
-          onPress: () => {
-            if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-            dispatch({ type: "CLEAR_TRADE_LOG" });
-            AsyncStorage.removeItem("bbg5_log");
-          },
-        },
+        { text: "Clear", style: "destructive", onPress: doIt },
       ]);
     }
-  }, [dispatch]);
+  }, [clearLogMutation]);
 
+  if (isLoading || !snapshot) {
+    return (
+      <ScreenContainer containerClassName="bg-background">
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Trade Log</Text>
+        </View>
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <ActivityIndicator size="large" color="#00f5a0" />
+        </View>
+      </ScreenContainer>
+    );
+  }
+
+  const { tradeLog, stats } = snapshot;
   const pnl = stats.pnl;
   const pnlStr = (pnl >= 0 ? "+" : "") + pnl.toFixed(2) + " USDT";
   const pnlColor = pnl >= 0 ? "#00f5a0" : "#ff4060";

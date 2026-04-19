@@ -1,0 +1,108 @@
+// ─── Shared Bot Types (server + client) ─────────────────────────────────────
+
+export interface BotConfig {
+  groq: string;
+  paper: boolean;
+  key: string;
+  secret: string;
+  testnet: boolean;
+  tgt: string;   // Telegram bot token
+  tgc: string;   // Telegram chat ID
+  sz: number;    // order size USDT
+  mx: number;    // max open trades
+  tp: number;    // take profit %
+  sl: number;    // stop loss %
+  lv: number;    // leverage
+  mc: number;    // min confidence %
+  p: {           // pairs
+    bs: boolean; // BTC spot
+    es: boolean; // ETH spot
+    bf: boolean; // BTC futures
+    ef: boolean; // ETH futures
+  };
+}
+
+export interface OpenTrade {
+  sym: string;
+  mkt: string;
+  cat: string;
+  side: 'long' | 'short';
+  entry: number;
+  qty: number;
+  tp: number;
+  sl: number;
+  time: number;
+  conf: number;
+  reasoning: string;
+  key_factor: string;
+  regime: string;
+  paper?: boolean;
+}
+
+export interface TradeLogEntry {
+  time: string;
+  sym: string;
+  mkt: string;
+  side: 'long' | 'short';
+  entry: number;
+  exit: number;
+  pnl: string;
+  reason: string;
+  conf: number;
+  reasoning: string;
+}
+
+export interface AIDecision {
+  sym: string;
+  mkt: string;
+  thinking: boolean;
+  action?: 'long' | 'short' | 'wait';
+  confidence?: number;
+  reasoning?: string;
+  key_factor?: string;
+  risk_level?: string;
+  market_regime?: string;
+  warnings?: string[];
+  time?: string;
+  price?: number;
+}
+
+export interface BotStats {
+  pnl: number;
+  trades: number;
+  wins: number;
+}
+
+export type BotStatus = 'offline' | 'running' | 'thinking';
+
+export interface BotSnapshot {
+  config: Omit<BotConfig, 'groq' | 'key' | 'secret'>;
+  status: BotStatus;
+  paused: boolean;
+  scanCount: number;
+  nextScanIn: number;
+  openTrades: Record<string, OpenTrade>;
+  tradeLog: TradeLogEntry[];
+  aiDecisions: Record<string, AIDecision>;
+  stats: BotStats;
+  newsHeadlines: string[];
+  tickers: Record<string, { last: number; chg: number; vol: number } | null>;
+  lastScanTime: string | null;
+}
+
+export const DEFAULT_CONFIG: BotConfig = {
+  groq: '',
+  paper: true,
+  key: '',
+  secret: '',
+  testnet: false,
+  tgt: '',
+  tgc: '',
+  sz: 20,
+  mx: 2,
+  tp: 0.5,
+  sl: 0.25,
+  lv: 5,
+  mc: 65,
+  p: { bs: true, es: true, bf: true, ef: true },
+};

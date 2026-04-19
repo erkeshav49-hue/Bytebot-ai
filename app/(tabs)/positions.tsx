@@ -1,6 +1,6 @@
-import { ScrollView, Text, View, StyleSheet, Platform } from "react-native";
+import { ScrollView, Text, View, StyleSheet, Platform, ActivityIndicator } from "react-native";
 import { ScreenContainer } from "@/components/screen-container";
-import { useBotContext } from "@/lib/bot-context";
+import { trpc } from "@/lib/trpc";
 
 function PositionCard({ trade }: { trade: any }) {
   const isLong = trade.side === "long";
@@ -43,8 +43,25 @@ function PositionCard({ trade }: { trade: any }) {
 }
 
 export default function PositionsScreen() {
-  const { state } = useBotContext();
-  const trades = Object.values(state.openTrades);
+  const { data: snapshot, isLoading } = trpc.bot.snapshot.useQuery(undefined, {
+    refetchInterval: 3000,
+    refetchIntervalInBackground: true,
+  });
+
+  if (isLoading || !snapshot) {
+    return (
+      <ScreenContainer containerClassName="bg-background">
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Positions</Text>
+        </View>
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <ActivityIndicator size="large" color="#00f5a0" />
+        </View>
+      </ScreenContainer>
+    );
+  }
+
+  const trades = Object.values(snapshot.openTrades);
 
   return (
     <ScreenContainer containerClassName="bg-background">

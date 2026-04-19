@@ -1,10 +1,10 @@
 import { useState, useCallback, useEffect } from "react";
-import { ScrollView, Text, View, TextInput, Switch, Pressable, StyleSheet, Platform, Alert } from "react-native";
+import { ScrollView, Text, View, TextInput, Switch, Pressable, StyleSheet, Platform, Alert, ActivityIndicator } from "react-native";
 import * as Haptics from "expo-haptics";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ScreenContainer } from "@/components/screen-container";
-import { useBotContext, BotConfig, DEFAULT_CONFIG } from "@/lib/bot-context";
-import { tgTestConnection } from "@/lib/telegram";
+import { trpc } from "@/lib/trpc";
+import type { BotConfig } from "@/shared/bot-types";
+import { DEFAULT_CONFIG } from "@/shared/bot-types";
 
 const PRESETS: Record<string, { sz: number; lv: number; tp: number; sl: number }> = {
   low: { sz: 10, lv: 3, tp: 0.3, sl: 0.15 },
@@ -59,13 +59,22 @@ function InputField({ label, value, onChangeText, placeholder, secureTextEntry, 
 }
 
 export default function SettingsScreen() {
-  const { state, saveConfig } = useBotContext();
-  const [form, setForm] = useState<BotConfig>({ ...state.config });
-  const [testingTg, setTestingTg] = useState(false);
+  const { data: serverConfig, isLoading } = trpc.bot.getConfig.useQuery(undefined, {
+    refetchInterval: 5000,
+  });
+  const setConfigMutation = trpc.bot.setConfig.useMutation();
+  const testTelegramMutation = trpc.bot.testTelegram.useMutation();
+  const resetMutation = trpc.bot.reset.useMutation();
+
+  const [form, setForm] = useState<BotConfig>({ ...DEFAULT_CONFIG });
+  const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
-    setForm({ ...state.config });
-  }, [state.config]);
+    if (serverConfig && !initialized) {
+      setForm({ ...serverConfig });
+      setInitialized(true);
+    }
+  }, [serverConfig, initialized]);
 
   const update = useCallback((key: keyof BotConfig, value: any) => {
     setForm(prev => ({ ...prev, [key]: value }));
@@ -77,8 +86,8 @@ export default function SettingsScreen() {
 
   const handleSave = useCallback(async () => {
     if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    await saveConfig(form);
-  }, [form, saveConfig]);
+    setConfigMutation.mutate(form);
+  }, [form, setConfigMutation]);
 
   const handlePreset = useCallback((name: string) => {
     const p = PRESETS[name];
@@ -89,26 +98,30 @@ export default function SettingsScreen() {
 
   const handleTestTg = useCallback(async () => {
     if (!form.tgt || !form.tgc) return;
-    setTestingTg(true);
-    const ok = await tgTestConnection(form.tgt, form.tgc);
-    setTestingTg(false);
-    if (ok) {
-      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      if (Platform.OS === "web") alert("Sent! Check Telegram");
-      else Alert.alert("Success", "Sent! Check Telegram");
-    } else {
-      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      if (Platform.OS === "web") alert("Failed to send test message");
-      else Alert.alert("Error", "Failed to send test message");
-    }
-  }, [form.tgt, form.tgc]);
+    testTelegramMutation.mutate({ token: form.tgt, chatId: form.tgc }, {
+      onSuccess: (data) => {
+        if (data.ok) {
+          if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          if (Platform.OS === "web") alert("Sent! Check Telegram");
+          else Alert.alert("Success", "Sent! Check Telegram");
+        } else {
+          if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+          if (Platform.OS === "web") alert("Failed to send test message");
+          else Alert.alert("Error", "Failed to send test message");
+        }
+      },
+    });
+  }, [form.tgt, form.tgc, testTelegramMutation]);
 
   const handleReset = useCallback(() => {
-    const doReset = async () => {
+    const doReset = () => {
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-      await AsyncStorage.clear();
-      setForm({ ...DEFAULT_CONFIG });
-      await saveConfig(DEFAULT_CONFIG);
+      resetMutation.mutate(undefined, {
+        onSuccess: () => {
+          setForm({ ...DEFAULT_CONFIG });
+          setInitialized(false);
+        },
+      });
     };
     if (Platform.OS === "web") {
       if (confirm("Reset all data and settings?")) doReset();
@@ -118,12 +131,28 @@ export default function SettingsScreen() {
         { text: "Reset", style: "destructive", onPress: doReset },
       ]);
     }
-  }, [saveConfig]);
+  }, [resetMutation]);
+
+  if (isLoading) {
+    return (
+      <ScreenContainer containerClassName="bg-background">
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Settings</Text>
+        </View>
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <ActivityIndicator size="large" color="#00f5a0" />
+        </View>
+      </ScreenContainer>
+    );
+  }
 
   return (
     <ScreenContainer containerClassName="bg-background">
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Settings</Text>
+        <View style={styles.serverTag}>
+          <Text style={styles.serverTagText}>SERVER-SIDE</Text>
+        </View>
       </View>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 14, paddingBottom: 120, paddingTop: 12 }}>
         {/* AI Brain */}
@@ -192,7 +221,7 @@ export default function SettingsScreen() {
             onPress={handleTestTg}
             style={({ pressed }) => [styles.testBtn, pressed && { opacity: 0.7 }]}
           >
-            <Text style={styles.testBtnText}>{testingTg ? "SENDING..." : "TEST CONNECTION"}</Text>
+            <Text style={styles.testBtnText}>{testTelegramMutation.isPending ? "SENDING..." : "TEST CONNECTION"}</Text>
           </Pressable>
         </View>
 
@@ -276,8 +305,11 @@ export default function SettingsScreen() {
           onPress={handleSave}
           style={({ pressed }) => [styles.saveBtn, pressed && { opacity: 0.9, transform: [{ scale: 0.97 }] }]}
         >
-          <Text style={styles.saveBtnText}>SAVE SETTINGS</Text>
+          <Text style={styles.saveBtnText}>{setConfigMutation.isPending ? "SAVING..." : "SAVE SETTINGS"}</Text>
         </Pressable>
+        {setConfigMutation.isSuccess ? (
+          <Text style={styles.savedText}>Settings saved to server</Text>
+        ) : null}
 
         {/* Danger Zone */}
         <View style={[styles.card, { borderColor: "rgba(255,64,96,0.2)", marginTop: 10 }]}>
@@ -306,6 +338,8 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(4,8,15,0.95)",
   },
   headerTitle: { fontWeight: "800", fontSize: 17, color: "#daeaf8" },
+  serverTag: { backgroundColor: "rgba(0,245,160,0.1)", borderWidth: 1, borderColor: "rgba(0,245,160,0.3)", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4 },
+  serverTagText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 8, fontWeight: "700", color: "#00f5a0", letterSpacing: 1 },
   card: { backgroundColor: "#080d18", borderWidth: 1, borderColor: "#1a2d48", borderRadius: 12, padding: 14, marginBottom: 10 },
   sectionTitle: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 8, fontWeight: "700", color: "#3d5470", letterSpacing: 2.5, textTransform: "uppercase", marginBottom: 11 },
   fieldGroup: { marginBottom: 11 },
@@ -323,6 +357,7 @@ const styles = StyleSheet.create({
   testBtnText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 10, fontWeight: "700", color: "#3d9bff", letterSpacing: 1 },
   saveBtn: { backgroundColor: "#00f5a0", borderRadius: 10, paddingVertical: 14, alignItems: "center", marginTop: 4 },
   saveBtnText: { fontSize: 16, fontWeight: "800", color: "#000", letterSpacing: 1, textTransform: "uppercase" },
+  savedText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 10, color: "#00f5a0", textAlign: "center", marginTop: 6 },
   resetBtn: { backgroundColor: "rgba(255,64,96,0.1)", borderWidth: 1, borderColor: "rgba(255,64,96,0.3)", borderRadius: 8, paddingVertical: 10, alignItems: "center" },
   resetBtnText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 10, fontWeight: "700", color: "#ff4060", letterSpacing: 1 },
 });

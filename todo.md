@@ -19,4 +19,13 @@
 - [x] Generate app logo and update branding
 - [x] Fix TypeScript errors (storageProxy.ts)
 - [x] Write and pass unit tests for indicators
-- [ ] Final testing and checkpoint
+- [x] Final testing and checkpoint
+- [x] Move bot scan loop to server side for 24/7 background operation
+- [x] Implement server-side indicators, Groq AI, Bybit API, Telegram services
+- [x] Create tRPC API endpoints for bot start/stop/status/config
+- [x] Create tRPC endpoints for positions, trade log, tickers, news, AI decisions
+- [x] Update mobile app Dashboard to poll server for state
+- [x] Update mobile app Settings to save config via server API
+- [x] Update mobile app Positions/Log to fetch from server
+- [x] Remove client-side bot engine (use-bot-engine.ts) in favor of server API
+- [x] Write and pass unit tests for server-side bot engine (20 tests passing)

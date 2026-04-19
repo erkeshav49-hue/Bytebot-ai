@@ -1,9 +1,8 @@
-import { useEffect, useCallback } from "react";
-import { ScrollView, Text, View, Pressable, StyleSheet, Platform } from "react-native";
+import { useCallback } from "react";
+import { ScrollView, Text, View, Pressable, StyleSheet, Platform, ActivityIndicator } from "react-native";
 import * as Haptics from "expo-haptics";
 import { ScreenContainer } from "@/components/screen-container";
-import { useBotContext } from "@/lib/bot-context";
-import { useBotEngine } from "@/lib/use-bot-engine";
+import { trpc } from "@/lib/trpc";
 
 function StatusDot({ status }: { status: string }) {
   const color = status === "running" ? "#00f5a0" : status === "thinking" ? "#a855f7" : "#3d5470";
@@ -126,35 +125,44 @@ function NewsItem({ headline }: { headline: string }) {
 }
 
 export default function DashboardScreen() {
-  const { state } = useBotContext();
-  const { startBot, stopBot, refreshTickers, fetchNews } = useBotEngine();
-  const { config, status, stats, scanCount, nextScanIn, tickers, newsHeadlines, aiDecisions } = state;
+  // Poll server snapshot every 3 seconds
+  const { data: snapshot, isLoading } = trpc.bot.snapshot.useQuery(undefined, {
+    refetchInterval: 3000,
+    refetchIntervalInBackground: true,
+  });
 
-  useEffect(() => {
-    refreshTickers();
-    fetchNews();
-    const t1 = setInterval(refreshTickers, 10000);
-    const t2 = setInterval(fetchNews, 300000);
-    return () => { clearInterval(t1); clearInterval(t2); };
-  }, []);
+  const startMutation = trpc.bot.start.useMutation();
+  const stopMutation = trpc.bot.stop.useMutation();
 
   const handleToggle = useCallback(() => {
     if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    if (status === "offline") {
-      const result = startBot();
-      // handle error if needed
+    if (!snapshot || snapshot.status === "offline") {
+      startMutation.mutate();
     } else {
-      stopBot();
+      stopMutation.mutate();
     }
-  }, [status, startBot, stopBot]);
+  }, [snapshot, startMutation, stopMutation]);
 
+  if (isLoading || !snapshot) {
+    return (
+      <ScreenContainer containerClassName="bg-background">
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <ActivityIndicator size="large" color="#00f5a0" />
+          <Text style={{ color: "#3d5470", marginTop: 12, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 10 }}>Connecting to server...</Text>
+        </View>
+      </ScreenContainer>
+    );
+  }
+
+  const { config, status, stats, scanCount, nextScanIn, tickers, newsHeadlines, aiDecisions } = snapshot;
   const pnl = stats.pnl;
   const pnlStr = (pnl >= 0 ? "+$" : "-$") + Math.abs(pnl).toFixed(2);
   const pnlColor = pnl >= 0 ? "#00f5a0" : "#ff4060";
   const wr = stats.trades ? ((stats.wins / stats.trades) * 100).toFixed(0) + "%" : "—";
-  const openCount = Object.keys(state.openTrades).length;
+  const openCount = Object.keys(snapshot.openTrades).length;
   const statusLabel = status === "running" ? "RUNNING" : status === "thinking" ? "THINKING" : "OFFLINE";
   const aiKeys = Object.keys(aiDecisions);
+  const isRunning = status !== "offline";
 
   return (
     <ScreenContainer containerClassName="bg-background">
@@ -174,6 +182,11 @@ export default function DashboardScreen() {
       </View>
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 14, paddingBottom: 100, paddingTop: 12 }}>
+        {/* Server-side badge */}
+        <View style={styles.serverBadge}>
+          <Text style={styles.serverBadgeText}>SERVER-SIDE 24/7 — bot runs even when app is closed</Text>
+        </View>
+
         {/* Stats Grid */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>PERFORMANCE</Text>
@@ -181,7 +194,7 @@ export default function DashboardScreen() {
             <StatBox label="TOTAL P&L" value={pnlStr} sub={`${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)} USDT`} color={pnlColor} />
             <StatBox label="TRADES" value={String(stats.trades)} sub={`Win: ${wr}`} />
             <StatBox label="OPEN" value={String(openCount)} sub="positions" color="#ffbe30" />
-            <StatBox label="AI SCANS" value={String(scanCount)} sub={status !== "offline" ? `Next: ${nextScanIn}s` : "—"} color="#a855f7" />
+            <StatBox label="AI SCANS" value={String(scanCount)} sub={isRunning ? `Next: ${nextScanIn}s` : "—"} color="#a855f7" />
           </View>
         </View>
 
@@ -190,17 +203,20 @@ export default function DashboardScreen() {
           <Pressable
             onPress={handleToggle}
             style={({ pressed }) => [
-              status === "offline" ? styles.btnStart : styles.btnStop,
+              !isRunning ? styles.btnStart : styles.btnStop,
               pressed && { opacity: 0.9, transform: [{ scale: 0.97 }] },
             ]}
           >
-            <Text style={status === "offline" ? styles.btnStartText : styles.btnStopText}>
-              {status === "offline" ? "▶  START AI AGENT" : "⏹  STOP AI AGENT"}
+            <Text style={!isRunning ? styles.btnStartText : styles.btnStopText}>
+              {!isRunning ? "▶  START AI AGENT" : "⏹  STOP AI AGENT"}
             </Text>
           </Pressable>
           <Text style={styles.startStatus}>
-            {status === "offline" ? "Agent stopped. Press START to begin." : status === "thinking" ? "Groq AI is analysing markets..." : `Scanning markets every 45s...`}
+            {!isRunning ? "Agent stopped. Press START to begin." : status === "thinking" ? "Groq AI is analysing markets..." : "Scanning markets every 45s (server-side)..."}
           </Text>
+          {startMutation.error ? (
+            <Text style={styles.errorText}>{startMutation.error.message}</Text>
+          ) : null}
         </View>
 
         {/* Live Prices */}
@@ -254,9 +270,11 @@ const styles = StyleSheet.create({
   logoTagText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 8, color: "#00f5a0", letterSpacing: 1 },
   modeBadge: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 3, borderWidth: 1 },
   modeBadgeText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 8, letterSpacing: 1, fontWeight: "700" },
-  statusPill: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20, backgroundColor: "#0d1422", borderWidth: 1, borderColor: "#1a2d48" },
+  statusPill: { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: "#0d1422", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, borderWidth: 1, borderColor: "#1a2d48" },
   statusText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 9, color: "#9ab3ce" },
   dot: { width: 6, height: 6, borderRadius: 3 },
+  serverBadge: { backgroundColor: "rgba(0,245,160,0.06)", borderWidth: 1, borderColor: "rgba(0,245,160,0.2)", borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, marginBottom: 10, alignItems: "center" },
+  serverBadgeText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 9, color: "#00f5a0", letterSpacing: 0.5, fontWeight: "600" },
   card: { backgroundColor: "#080d18", borderWidth: 1, borderColor: "#1a2d48", borderRadius: 12, padding: 14, marginBottom: 10 },
   cardTitle: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 8, fontWeight: "700", color: "#3d5470", letterSpacing: 2.5, textTransform: "uppercase", marginBottom: 11 },
   statsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
@@ -270,6 +288,7 @@ const styles = StyleSheet.create({
   btnStop: { width: "100%", paddingVertical: 16, borderRadius: 10, backgroundColor: "#ff4060", alignItems: "center" },
   btnStopText: { fontSize: 18, fontWeight: "800", color: "#fff", letterSpacing: 1, textTransform: "uppercase" },
   startStatus: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 10, color: "#3d5470", marginTop: 10, textAlign: "center" },
+  errorText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 10, color: "#ff4060", marginTop: 6 },
   tickerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: "#1a2d48" },
   tickerSym: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontWeight: "700", fontSize: 13, color: "#daeaf8" },
   tickerLabel: { fontSize: 9, color: "#3d5470" },
