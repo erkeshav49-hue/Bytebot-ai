@@ -35,3 +35,6 @@
 - [x] Ensure AI decides when to enter and exit trades (AI analyzes indicators + news + trade history)
 - [x] Add Telegram bot command handler — full command set: /help /status /positions /trades /balance /ask /startbot /stopbot /pause /resume /size /tp /sl /leverage /confidence /risk /settings
 - [x] Groq responds to any message in Telegram — not just commands, any text triggers Groq AI response
+- [x] Fix Groq AI chat identity — AI now knows it IS ByteBot with full bot state context
+- [x] Pass bot state (status, P&L, positions, settings, news, AI decisions, trade history) to Groq chat
+- [x] AI knows it's scanning markets, opening trades, and managing the user's strategy

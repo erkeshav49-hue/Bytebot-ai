@@ -254,16 +254,77 @@ Respond with ONLY this JSON, no other text:
   return JSON.parse(text) as GroqDecision;
 }
 
-// ─── Groq AI: Answer any question (for Telegram /ask command) ───────────────
+// ─── Groq AI: Answer any question (for Telegram /ask command & free chat) ────
+
+function buildBotContextForChat(): string {
+  const wr = stats.trades ? ((stats.wins / stats.trades) * 100).toFixed(0) + '%' : 'no trades yet';
+  const posKeys = Object.keys(openTrades);
+  const positionsCtx = posKeys.length
+    ? posKeys.map(k => {
+        const t = openTrades[k];
+        return `  - ${t.sym} [${t.mkt}] ${t.side.toUpperCase()} | Entry: ${t.entry} | TP: ${t.tp} | SL: ${t.sl} | Confidence: ${t.conf}%`;
+      }).join('\n')
+    : '  None';
+  const recentTradesCtx = tradeLog.length
+    ? tradeLog.slice(0, 5).map(t => `  - ${t.sym} ${t.side.toUpperCase()} → ${+t.pnl >= 0 ? '+' : ''}${t.pnl} USDT (${t.reason})`).join('\n')
+    : '  None yet';
+  const newsCtx = newsHeadlines.length
+    ? newsHeadlines.slice(0, 5).map((h, i) => `  ${i + 1}. ${h}`).join('\n')
+    : '  No news fetched yet';
+  const aiCtx = Object.keys(aiDecisions).length
+    ? Object.keys(aiDecisions).map(k => {
+        const d = aiDecisions[k];
+        if (d.thinking) return `  - ${d.sym} [${d.mkt}]: ANALYZING...`;
+        return `  - ${d.sym} [${d.mkt}]: ${(d as any).action?.toUpperCase() || 'WAIT'} (${(d as any).confidence || 0}%) — ${((d as any).reasoning || '').slice(0, 80)}`;
+      }).join('\n')
+    : '  No analysis yet — bot may not have started scanning';
+
+  return `YOUR CURRENT STATE (this is real-time data — use it to answer the user):
+
+Bot Status: ${status !== 'offline' ? (paused ? 'PAUSED' : 'RUNNING') : 'STOPPED'}
+Mode: ${config.paper ? 'PAPER TRADING (simulated, no real money)' : config.testnet ? 'TESTNET' : 'LIVE TRADING (real money!)'}
+Total Scans: ${scanCount}
+P&L: ${stats.pnl >= 0 ? '+' : ''}${stats.pnl.toFixed(3)} USDT
+Trades: ${stats.trades} | Win Rate: ${wr}
+Settings: Size ${config.sz} USDT | Leverage ${config.lv}× | TP ${config.tp}% | SL ${config.sl}% | Min Confidence ${config.mc || 65}%
+Max Open Positions: ${config.mx || 2}
+
+OPEN POSITIONS:
+${positionsCtx}
+
+LATEST AI DECISIONS:
+${aiCtx}
+
+RECENT TRADE HISTORY:
+${recentTradesCtx}
+
+CRYPTO NEWS (you are reading these):
+${newsCtx}`;
+}
 
 async function askGroqQuestion(groqKey: string, question: string): Promise<string> {
   try {
+    const botContext = buildBotContextForChat();
+    const systemPrompt = `You are ByteBot AI — an autonomous crypto trading bot that is ACTIVELY running on the user's server 24/7. You are NOT a generic assistant. You ARE the bot.
+
+IMPORTANT IDENTITY RULES:
+- You scan crypto markets every 45 seconds using technical indicators (EMA, RSI, MACD, ADX, Bollinger Bands) and Groq AI analysis.
+- You open and close trades automatically based on your analysis. You set TP/SL targets and monitor them.
+- You read crypto news and factor it into every trading decision.
+- When the user asks "how are you doing" or "what's your status" — report YOUR actual state from the data below.
+- When the user asks about positions, trades, P&L — answer from YOUR real data below.
+- When the user asks about your capabilities or limitations — you CAN trade, you CAN scan markets, you CAN open/close positions. You are connected to Bybit exchange.
+- Be conversational, confident, and helpful. You are the user's AI trading partner.
+- Keep responses under 200 words. Be specific with numbers from your state data.
+
+${botContext}`;
+
     const body = JSON.stringify({
       model: 'llama-3.3-70b-versatile',
       max_tokens: 500,
       temperature: 0.3,
       messages: [
-        { role: 'system', content: 'You are ByteBot AI, a helpful crypto trading assistant. Be brief, practical, and informative. Max 200 words. You can answer any question — crypto, trading, market analysis, general knowledge, or casual conversation. Be friendly and helpful.' },
+        { role: 'system', content: systemPrompt },
         { role: 'user', content: question },
       ],
     });
