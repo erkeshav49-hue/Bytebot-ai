@@ -5,7 +5,7 @@
 
 import type {
   BotConfig, BotStatus, BotStats, OpenTrade, TradeLogEntry,
-  AIDecision, BotSnapshot,
+  AIDecision, BotSnapshot, StrategyNote, TradeLearning, StrategyState,
 } from "../shared/bot-types";
 import { DEFAULT_CONFIG } from "../shared/bot-types";
 
@@ -201,14 +201,19 @@ async function askGroq(groqKey: string, sym: string, mkt: string, indicators: In
   const newsCtx = headlines.length ? 'RECENT CRYPTO NEWS (factor these into your analysis — bullish news supports longs, bearish news supports shorts or wait):\n' + headlines.slice(0, 6).map((h, i) => `${i + 1}. ${h}`).join('\n') : 'No news available.';
   const tradeCtx = recentTrades.length ? 'RECENT TRADE HISTORY (learn from these — avoid repeating losing patterns):\n' + recentTrades.slice(0, 5).map(t => `- ${t.side.toUpperCase()} ${t.sym} [${t.mkt}]: P&L ${+t.pnl >= 0 ? '+' : ''}${t.pnl} USDT (${t.reason})`).join('\n') : 'No recent trades yet.';
 
-  const prompt = `You are an expert cryptocurrency scalping trader. Analyze ALL the data below — technical indicators, higher timeframe trend, news sentiment, and recent trade history — then return a trading decision as JSON only.
+  const stratCtx = getStrategyContext();
+  const prompt = `You are an expert cryptocurrency scalping trader. Analyze ALL the data below — technical indicators, higher timeframe trend, news sentiment, recent trade history, AND strategy notes — then return a trading decision as JSON only.
 
 IMPORTANT RULES:
+- You MUST follow USER STRATEGY INSTRUCTIONS if any are provided below. These are direct orders from the user.
+- You MUST consider AI SELF-LEARNED NOTES and TRADE PATTERN ANALYSIS to avoid repeating mistakes.
 - You MUST consider the NEWS section. Bullish news (ETF approvals, institutional buying, regulatory clarity) supports LONG. Bearish news (hacks, bans, crashes) supports SHORT or WAIT.
 - You MUST consider the HIGHER TIMEFRAME trend. Do NOT go against the HTF trend unless you have very strong reasons.
 - If you see recent losing trades, analyze WHY they lost and avoid the same pattern.
 - Only recommend "long" or "short" if confidence >= 60. Otherwise say "wait".
 - For spot market, you can ONLY recommend "long" or "wait" (no shorting spot).
+
+${stratCtx}
 
 SYMBOL: ${sym} | MARKET: ${mkt.toUpperCase()} | TIMEFRAME: 5min
 PRICE: ${ticker.last} | 24H CHANGE: ${(ticker.chg * 100).toFixed(2)}% | VOLUME: ${(ticker.vol / 1e6).toFixed(1)}M USDT
@@ -305,19 +310,25 @@ ${newsCtx}`;
 async function askGroqQuestion(groqKey: string, question: string): Promise<string> {
   try {
     const botContext = buildBotContextForChat();
+    const stratCtx = getStrategyContext();
     const systemPrompt = `You are ByteBot AI — an autonomous crypto trading bot that is ACTIVELY running on the user's server 24/7. You are NOT a generic assistant. You ARE the bot.
 
 IMPORTANT IDENTITY RULES:
 - You scan crypto markets every 45 seconds using technical indicators (EMA, RSI, MACD, ADX, Bollinger Bands) and Groq AI analysis.
 - You open and close trades automatically based on your analysis. You set TP/SL targets and monitor them.
 - You read crypto news and factor it into every trading decision.
+- You LEARN from past trades and adapt your strategy over time.
+- You accept strategy changes from the user via natural language. When the user tells you to change strategy, you remember it and apply it to future trades.
 - When the user asks "how are you doing" or "what's your status" — report YOUR actual state from the data below.
 - When the user asks about positions, trades, P&L — answer from YOUR real data below.
-- When the user asks about your capabilities or limitations — you CAN trade, you CAN scan markets, you CAN open/close positions. You are connected to Bybit exchange.
+- When the user asks about your capabilities or limitations — you CAN trade, you CAN scan markets, you CAN open/close positions. You are connected to Bybit exchange. You CAN learn and adapt.
+- When the user tells you to change strategy (e.g. "be more aggressive", "avoid shorting ETH", "only trade BTC"), confirm you understood and tell them to use /strategy <instruction> to make it permanent.
 - Be conversational, confident, and helpful. You are the user's AI trading partner.
 - Keep responses under 200 words. Be specific with numbers from your state data.
 
-${botContext}`;
+${botContext}
+
+${stratCtx ? 'YOUR CURRENT STRATEGY MEMORY:\n' + stratCtx : 'No strategy notes yet. The user can tell you to change strategy and you will remember.'}`;
 
     const body = JSON.stringify({
       model: 'llama-3.3-70b-versatile',
@@ -356,6 +367,13 @@ let newsHeadlines: string[] = [];
 let tickers: Record<string, { last: number; chg: number; vol: number } | null> = {};
 let lastScanTime: string | null = null;
 
+// ─── Strategy Memory & Learning State ─────────────────────────────────────
+let strategyNotes: StrategyNote[] = [];
+let tradeLearnings: TradeLearning[] = [];
+let lastAnalysisTime: string | null = null;
+let totalAnalyses = 0;
+let analysisTimer: ReturnType<typeof setInterval> | null = null;
+
 let scanTimer: ReturnType<typeof setInterval> | null = null;
 let tickerTimer: ReturnType<typeof setInterval> | null = null;
 let newsTimer: ReturnType<typeof setInterval> | null = null;
@@ -390,6 +408,11 @@ function closeTrade(key: string, ep: number, pnl: number, reason: string) {
   tradeLog = [logEntry, ...tradeLog].slice(0, 200);
   const tgMsg = (pnl > 0 ? '✅' : '❌') + ` <b>Trade Closed [${reason}]</b>\n${t.sym} ${t.side.toUpperCase()} [${t.mkt}]\nEntry: ${t.entry} → Exit: ${ep}\nP&L: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(3)} USDT\nTotal: ${stats.pnl >= 0 ? '+' : ''}${stats.pnl.toFixed(3)} USDT`;
   tgSend(config.tgt, config.tgc, tgMsg);
+
+  // Auto-analyze after every 5 trades
+  if (stats.trades > 0 && stats.trades % 5 === 0) {
+    setTimeout(() => analyzeTradePerformance(), 5000);
+  }
 }
 
 async function syncPositions() {
@@ -465,6 +488,222 @@ async function openPosition(sym: string, mkt: string, cat: string, decision: Gro
   } catch (e: any) {
     tgSend(config.tgt, config.tgc, `⚠️ <b>Order Error</b>\n${sym} ${decision.action.toUpperCase()}\n${e.message || 'Network error'}`);
   }
+}
+
+// ─── Strategy Memory & Self-Learning ────────────────────────────────────────
+
+function getStrategyContext(): string {
+  const userNotes = strategyNotes.filter(n => n.type === 'user');
+  const aiLearnings = strategyNotes.filter(n => n.type === 'learning');
+  let ctx = '';
+  if (userNotes.length) {
+    ctx += 'USER STRATEGY INSTRUCTIONS (MUST follow these — the user explicitly told you):\n';
+    ctx += userNotes.map((n, i) => `  ${i + 1}. ${n.text}`).join('\n');
+    ctx += '\n\n';
+  }
+  if (aiLearnings.length) {
+    ctx += 'AI SELF-LEARNED NOTES (patterns you discovered from past trades):\n';
+    ctx += aiLearnings.map((n, i) => `  ${i + 1}. ${n.text}`).join('\n');
+    ctx += '\n\n';
+  }
+  if (tradeLearnings.length) {
+    ctx += 'TRADE PATTERN ANALYSIS:\n';
+    ctx += tradeLearnings.map(l =>
+      `  - ${l.pattern}: ${l.outcome} (${l.winRate.toFixed(0)}% win rate, ${l.sampleSize} trades) → ${l.recommendation}`
+    ).join('\n');
+    ctx += '\n\n';
+  }
+  return ctx;
+}
+
+function addNote(type: 'user' | 'learning', text: string, source: string): StrategyNote {
+  const note: StrategyNote = {
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    type, text, createdAt: new Date().toISOString(), source,
+  };
+  strategyNotes = [note, ...strategyNotes].slice(0, 50); // keep max 50 notes
+  return note;
+}
+
+async function analyzeTradePerformance() {
+  if (tradeLog.length < 3 || !config.groq) return; // need at least 3 trades
+  totalAnalyses++;
+  lastAnalysisTime = new Date().toISOString();
+
+  const existingNotes = strategyNotes.map(n => n.text).join('; ');
+  const tradesCtx = tradeLog.slice(0, 20).map(t =>
+    `${t.sym} ${t.side.toUpperCase()} [${t.mkt}] conf:${t.conf}% pnl:${t.pnl} reason:${t.reason} reasoning:${(t.reasoning || '').slice(0, 100)}`
+  ).join('\n');
+
+  const prompt = `You are ByteBot AI's self-analysis module. Analyze the trade history below and identify patterns.
+
+EXISTING STRATEGY NOTES: ${existingNotes || 'None yet'}
+
+TRADE HISTORY (most recent first):
+${tradesCtx}
+
+OVERALL STATS: ${stats.trades} trades, ${stats.wins} wins, P&L: ${stats.pnl.toFixed(3)} USDT
+
+Analyze and return JSON with:
+1. "patterns" - array of {"pattern": "description", "outcome": "winning|losing", "win_rate": 0-100, "sample_size": number, "recommendation": "what to do"}
+2. "new_learnings" - array of short strings (max 3) with NEW insights not already in existing notes
+3. "strategy_adjustments" - array of short strings (max 2) suggesting parameter changes (e.g. "increase min confidence to 75%")
+
+Respond with ONLY valid JSON. Be specific with symbols, timeframes, and market conditions.`;
+
+  try {
+    const body = JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      max_tokens: 600,
+      temperature: 0.2,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: 'You are a trade performance analyst. Return ONLY valid JSON.' },
+        { role: 'user', content: prompt },
+      ],
+    });
+    const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + config.groq },
+      body,
+    });
+    const data = await r.json();
+    if (data.error) return;
+    const text = data.choices[0].message.content.trim().replace(/```json|```/g, '').trim();
+    const result = JSON.parse(text);
+
+    // Update trade learnings
+    if (Array.isArray(result.patterns)) {
+      tradeLearnings = result.patterns.slice(0, 10).map((p: any) => ({
+        pattern: p.pattern || 'Unknown',
+        outcome: p.outcome === 'winning' ? 'winning' : 'losing',
+        winRate: +p.win_rate || 0,
+        sampleSize: +p.sample_size || 0,
+        insight: p.pattern || '',
+        recommendation: p.recommendation || '',
+        createdAt: new Date().toISOString(),
+      } as TradeLearning));
+    }
+
+    // Add new AI-learned notes
+    if (Array.isArray(result.new_learnings)) {
+      for (const learning of result.new_learnings.slice(0, 3)) {
+        if (typeof learning === 'string' && learning.length > 5) {
+          addNote('learning', learning, 'auto-analysis');
+        }
+      }
+    }
+
+    // Notify via Telegram
+    if (config.tgt && config.tgc) {
+      let msg = '🧠 <b>Self-Analysis Complete</b>\n\n';
+      if (tradeLearnings.length) {
+        msg += '<b>Patterns Found:</b>\n';
+        msg += tradeLearnings.slice(0, 3).map(l =>
+          `${l.outcome === 'winning' ? '✅' : '❌'} ${l.pattern} (${l.winRate.toFixed(0)}% WR)\n→ ${l.recommendation}`
+        ).join('\n');
+      }
+      if (Array.isArray(result.new_learnings) && result.new_learnings.length) {
+        msg += '\n\n<b>New Learnings:</b>\n';
+        msg += result.new_learnings.slice(0, 3).map((l: string) => '💡 ' + l).join('\n');
+      }
+      if (Array.isArray(result.strategy_adjustments) && result.strategy_adjustments.length) {
+        msg += '\n\n<b>Suggested Adjustments:</b>\n';
+        msg += result.strategy_adjustments.slice(0, 2).map((a: string) => '🔧 ' + a).join('\n');
+      }
+      tgSend(config.tgt, config.tgc, msg);
+    }
+  } catch { /* silent */ }
+}
+
+async function processStrategyCommand(groqKey: string, userMessage: string): Promise<string> {
+  const currentNotes = strategyNotes.map(n => `[${n.type}] ${n.text}`).join('\n');
+  const prompt = `You are ByteBot AI's strategy manager. The user wants to change the trading strategy.
+
+CURRENT STRATEGY NOTES:
+${currentNotes || 'No notes yet.'}
+
+CURRENT SETTINGS: Size ${config.sz} USDT | Leverage ${config.lv}× | TP ${config.tp}% | SL ${config.sl}% | Min Confidence ${config.mc}%
+
+USER REQUEST: "${userMessage}"
+
+Analyze the request and return JSON:
+{
+  "understood": true/false,
+  "summary": "brief summary of what you understood",
+  "new_notes": ["strategy note 1", "strategy note 2"],
+  "remove_note_ids": [],
+  "param_changes": { "sz": null, "lv": null, "tp": null, "sl": null, "mc": null },
+  "response": "conversational response to the user confirming the changes"
+}
+
+Rules:
+- new_notes: short, actionable strategy instructions (e.g. "Avoid shorting ETH in ranging markets", "Only trade BTC during high volume")
+- param_changes: set numeric values if user wants to change them, null if not mentioned
+- Be helpful and confirm what you're changing
+- If the request is unclear, set understood to false and ask for clarification in response`;
+
+  try {
+    const body = JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      max_tokens: 500,
+      temperature: 0.2,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: 'You are a strategy manager. Return ONLY valid JSON.' },
+        { role: 'user', content: prompt },
+      ],
+    });
+    const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + groqKey },
+      body,
+    });
+    const data = await r.json();
+    if (data.error) return 'Groq error: ' + (data.error.message || 'unknown');
+    const text = data.choices[0].message.content.trim().replace(/```json|```/g, '').trim();
+    const result = JSON.parse(text);
+
+    if (!result.understood) return result.response || 'I didn\'t understand that strategy change. Can you rephrase?';
+
+    // Add new strategy notes
+    if (Array.isArray(result.new_notes)) {
+      for (const note of result.new_notes) {
+        if (typeof note === 'string' && note.length > 3) {
+          addNote('user', note, 'telegram');
+        }
+      }
+    }
+
+    // Apply parameter changes
+    if (result.param_changes) {
+      const pc = result.param_changes;
+      if (pc.sz != null && +pc.sz >= 5) config.sz = +pc.sz;
+      if (pc.lv != null && +pc.lv >= 1 && +pc.lv <= 50) config.lv = +pc.lv;
+      if (pc.tp != null && +pc.tp > 0) config.tp = +pc.tp;
+      if (pc.sl != null && +pc.sl > 0) config.sl = +pc.sl;
+      if (pc.mc != null && +pc.mc >= 1 && +pc.mc <= 100) config.mc = +pc.mc;
+    }
+
+    return result.response || 'Strategy updated!';
+  } catch (e: any) {
+    return 'Error processing strategy: ' + (e.message || 'unknown');
+  }
+}
+
+// Exported for tRPC
+export function botAddStrategyNote(text: string, source: string = 'app'): StrategyNote {
+  return addNote('user', text, source);
+}
+
+export function botRemoveStrategyNote(id: string): boolean {
+  const before = strategyNotes.length;
+  strategyNotes = strategyNotes.filter(n => n.id !== id);
+  return strategyNotes.length < before;
+}
+
+export function botGetStrategy(): StrategyState {
+  return { notes: strategyNotes, learnings: tradeLearnings, lastAnalysisTime, totalAnalyses };
 }
 
 // ─── Core scan loop ─────────────────────────────────────────────────────────
@@ -579,8 +818,9 @@ async function handleTelegramCommand(text: string) {
         '🤖 <b>ByteBot AI Commands</b>\n\n' +
         '<b>Info</b>\n/status · /positions · /trades · /balance\n/ask &lt;question&gt;\n\n' +
         '<b>Control</b>\n/startbot · /stopbot · /pause · /resume\n\n' +
+        '<b>Strategy 🧠</b>\n/strategy &lt;instruction&gt; — teach me a new rule\n/insights — view learned patterns\n/notes — view all strategy notes\n/forget &lt;id&gt; — remove a note\n/analyze — trigger self-analysis now\n\n' +
         '<b>Settings</b>\n/size &lt;n&gt; · /tp &lt;%&gt; · /sl &lt;%&gt;\n/leverage &lt;n&gt; · /confidence &lt;%&gt;\n/risk low|med|high · /settings\n\n' +
-        '<i>Or just type any message and Groq AI will respond!</i>');
+        '<i>Or just type any message and I\'ll respond with full context!</i>');
       break;
 
     case 'status':
@@ -708,13 +948,68 @@ async function handleTelegramCommand(text: string) {
       break;
     }
 
+    case 'strategy': {
+      const instruction = args.join(' ');
+      if (!instruction) { tgSend(config.tgt, config.tgc, 'Usage: /strategy <instruction>\nExample: /strategy avoid shorting ETH in ranging markets'); break; }
+      if (!config.groq) { tgSend(config.tgt, config.tgc, '⚠️ Groq API key not set'); break; }
+      tgSend(config.tgt, config.tgc, '🧠 Processing strategy change...');
+      const response = await processStrategyCommand(config.groq, instruction);
+      tgSend(config.tgt, config.tgc, '🧠 <b>Strategy Updated</b>\n\n' + response);
+      break;
+    }
+
+    case 'insights': {
+      if (!tradeLearnings.length) {
+        tgSend(config.tgt, config.tgc, '📊 No trade insights yet. I need at least 3 trades to start learning. Use /analyze after some trades.');
+        break;
+      }
+      let msg = '📊 <b>Trade Insights</b>\n\n';
+      msg += tradeLearnings.slice(0, 5).map(l =>
+        `${l.outcome === 'winning' ? '✅' : '❌'} <b>${l.pattern}</b>\nWin rate: ${l.winRate.toFixed(0)}% (${l.sampleSize} trades)\n→ ${l.recommendation}`
+      ).join('\n\n');
+      if (lastAnalysisTime) msg += `\n\nLast analysis: ${new Date(lastAnalysisTime).toLocaleString()} (${totalAnalyses} total)`;
+      tgSend(config.tgt, config.tgc, msg);
+      break;
+    }
+
+    case 'notes': {
+      if (!strategyNotes.length) {
+        tgSend(config.tgt, config.tgc, '📝 No strategy notes yet.\nUse /strategy <instruction> to teach me a rule.\nExample: /strategy only trade BTC during high volume');
+        break;
+      }
+      let msg = '📝 <b>Strategy Notes</b>\n\n';
+      msg += strategyNotes.slice(0, 15).map(n =>
+        `${n.type === 'user' ? '👤' : '🤖'} <code>${n.id}</code> ${n.text}`
+      ).join('\n');
+      msg += '\n\nUse /forget <id> to remove a note.';
+      tgSend(config.tgt, config.tgc, msg);
+      break;
+    }
+
+    case 'forget': {
+      const noteId = args[0];
+      if (!noteId) { tgSend(config.tgt, config.tgc, 'Usage: /forget <note_id>\nUse /notes to see IDs.'); break; }
+      const removed = botRemoveStrategyNote(noteId);
+      tgSend(config.tgt, config.tgc, removed ? '✅ Note removed.' : '❌ Note not found. Use /notes to see IDs.');
+      break;
+    }
+
+    case 'analyze': {
+      if (tradeLog.length < 3) { tgSend(config.tgt, config.tgc, '⚠️ Need at least 3 trades to analyze. Keep trading!'); break; }
+      if (!config.groq) { tgSend(config.tgt, config.tgc, '⚠️ Groq API key not set'); break; }
+      tgSend(config.tgt, config.tgc, '🧠 Running self-analysis on trade history...');
+      await analyzeTradePerformance();
+      break;
+    }
+
     case 'settings':
       tgSend(config.tgt, config.tgc,
         '⚙️ <b>Settings</b>\n' +
         `Mode: ${config.paper ? '📄 PAPER' : config.testnet ? 'TESTNET' : 'LIVE'}\n` +
         `Size: ${config.sz} USDT | Lev: ${config.lv}×\n` +
         `TP: ${config.tp}% | SL: ${config.sl}%\n` +
-        `Min confidence: ${config.mc || 65}% | Max open: ${config.mx || 2}`);
+        `Min confidence: ${config.mc || 65}% | Max open: ${config.mx || 2}\n` +
+        `Strategy notes: ${strategyNotes.length} | Learnings: ${tradeLearnings.length}`);
       break;
 
     default:
@@ -755,6 +1050,12 @@ export function botGetSnapshot(): BotSnapshot {
     status, paused, scanCount, nextScanIn,
     openTrades, tradeLog, aiDecisions, stats,
     newsHeadlines, tickers, lastScanTime,
+    strategy: {
+      notes: strategyNotes,
+      learnings: tradeLearnings,
+      lastAnalysisTime,
+      totalAnalyses,
+    },
   };
 }
 
@@ -811,6 +1112,12 @@ export function botStart(): { error: string | null } {
     startTGPoll();
   }
 
+  // Periodic self-analysis every 10 minutes (if enough trades)
+  if (analysisTimer) clearInterval(analysisTimer);
+  analysisTimer = setInterval(() => {
+    if (tradeLog.length >= 3) analyzeTradePerformance();
+  }, 600000); // 10 minutes
+
   return { error: null };
 }
 
@@ -821,6 +1128,7 @@ export function botStop() {
   if (scanTimer) { clearInterval(scanTimer); scanTimer = null; }
   if (tickerTimer) { clearInterval(tickerTimer); tickerTimer = null; }
   if (newsTimer) { clearInterval(newsTimer); newsTimer = null; }
+  if (analysisTimer) { clearInterval(analysisTimer); analysisTimer = null; }
   stopTGPoll();
   console.log('[BotEngine] Bot stopped');
   tgSend(config.tgt, config.tgc, '⏹ <b>ByteBot AI Stopped</b>');
@@ -848,6 +1156,11 @@ export function botResetAll() {
   tickers = {};
   lastScanTime = null;
   scanCount = 0;
+  strategyNotes = [];
+  tradeLearnings = [];
+  lastAnalysisTime = null;
+  totalAnalyses = 0;
+  if (analysisTimer) { clearInterval(analysisTimer); analysisTimer = null; }
 }
 
 export async function botTestTelegram(token: string, chatId: string): Promise<boolean> {

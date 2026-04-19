@@ -38,3 +38,11 @@
 - [x] Fix Groq AI chat identity — AI now knows it IS ByteBot with full bot state context
 - [x] Pass bot state (status, P&L, positions, settings, news, AI decisions, trade history) to Groq chat
 - [x] AI knows it's scanning markets, opening trades, and managing the user's strategy
+- [x] Add strategy memory system — persistent notes that influence every AI decision
+- [x] Add trade performance analysis — bot learns from winning/losing patterns (auto every 5 trades + 10min)
+- [x] Add Telegram strategy commands — user can tell bot to change strategy via natural language
+- [x] Add /strategy, /notes, /forget, /insights, /analyze Telegram commands
+- [x] Inject strategy memory + trade learnings into Groq AI trading prompt
+- [x] Inject strategy memory into Groq AI chat prompt so bot knows its own strategy
+- [x] Update Dashboard UI to show current strategy notes and learning insights
+- [x] Strategy notes visible on Dashboard (Settings edit via Telegram /strategy command)

@@ -154,7 +154,7 @@ export default function DashboardScreen() {
     );
   }
 
-  const { config, status, stats, scanCount, nextScanIn, tickers, newsHeadlines, aiDecisions } = snapshot;
+  const { config, status, stats, scanCount, nextScanIn, tickers, newsHeadlines, aiDecisions, strategy } = snapshot;
   const pnl = stats.pnl;
   const pnlStr = (pnl >= 0 ? "+$" : "-$") + Math.abs(pnl).toFixed(2);
   const pnlColor = pnl >= 0 ? "#00f5a0" : "#ff4060";
@@ -239,20 +239,66 @@ export default function DashboardScreen() {
           )}
         </View>
 
+        {/* Strategy Memory */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>STRATEGY MEMORY</Text>
+          {strategy && (strategy.notes?.length > 0 || strategy.learnings?.length > 0) ? (
+            <View>
+              {strategy.notes?.length > 0 && (
+                <View style={{ marginBottom: 10 }}>
+                  <Text style={styles.stratLabel}>ACTIVE RULES ({strategy.notes.length})</Text>
+                  {strategy.notes.slice(0, 5).map((n: any) => (
+                    <View key={n.id} style={styles.stratNote}>
+                      <Text style={styles.stratIcon}>{n.type === 'user' ? '👤' : '🤖'}</Text>
+                      <Text style={styles.stratText}>{n.text}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+              {strategy.learnings?.length > 0 && (
+                <View>
+                  <Text style={styles.stratLabel}>LEARNED PATTERNS ({strategy.learnings.length})</Text>
+                  {strategy.learnings.slice(0, 3).map((l: any, i: number) => (
+                    <View key={i} style={styles.stratLearning}>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 3 }}>
+                        <Text style={[styles.stratText, { fontWeight: '600', flex: 1 }]}>{l.pattern}</Text>
+                        <Text style={[styles.stratWr, { color: l.outcome === 'winning' ? '#00f5a0' : '#ff4060' }]}>{l.winRate?.toFixed(0)}% WR</Text>
+                      </View>
+                      <Text style={styles.stratRec}>{l.recommendation}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+              {strategy.totalAnalyses > 0 && (
+                <Text style={styles.stratMeta}>Self-analyses: {strategy.totalAnalyses} | Last: {strategy.lastAnalysisTime ? new Date(strategy.lastAnalysisTime).toLocaleTimeString() : '—'}</Text>
+              )}
+            </View>
+          ) : (
+            <View style={{ alignItems: 'center', paddingVertical: 14 }}>
+              <Text style={{ fontSize: 24, marginBottom: 6 }}>🧠</Text>
+              <Text style={styles.emptyText}>No strategy notes yet</Text>
+              <Text style={[styles.emptyText, { marginTop: 2 }]}>Send /strategy {"<"}instruction{">"}  in Telegram to teach the AI</Text>
+            </View>
+          )}
+        </View>
+
         {/* Telegram Commands */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>TELEGRAM COMMANDS</Text>
           <View style={styles.tgCmdBlock}>
             <Text style={styles.tgCmdGroup}>Info</Text>
             <Text style={styles.tgCmdText}>/status  /positions  /trades  /balance</Text>
-            <Text style={styles.tgCmdText}>/ask {"<"}question{">"}  (ask Groq AI anything)</Text>
+            <Text style={styles.tgCmdText}>/ask {"<"}question{">"}</Text>
             <Text style={styles.tgCmdGroup}>Control</Text>
             <Text style={styles.tgCmdText}>/startbot  /stopbot  /pause  /resume</Text>
+            <Text style={[styles.tgCmdGroup, { color: "#a855f7" }]}>Strategy</Text>
+            <Text style={styles.tgCmdText}>/strategy {"<"}instruction{">"}  — teach a rule</Text>
+            <Text style={styles.tgCmdText}>/notes  /insights  /analyze  /forget</Text>
             <Text style={styles.tgCmdGroup}>Settings</Text>
             <Text style={styles.tgCmdText}>/size  /tp  /sl  /leverage  /confidence</Text>
             <Text style={styles.tgCmdText}>/risk low|med|high  /settings</Text>
             <Text style={[styles.tgCmdGroup, { color: "#a855f7" }]}>AI Chat</Text>
-            <Text style={styles.tgCmdText}>Just type any message and Groq AI will respond!</Text>
+            <Text style={styles.tgCmdText}>Just type any message and I'll respond!</Text>
           </View>
         </View>
 
@@ -340,4 +386,12 @@ const styles = StyleSheet.create({
   tgCmdBlock: { paddingVertical: 4 },
   tgCmdGroup: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 9, color: "#00f5a0", fontWeight: "700", marginTop: 6, marginBottom: 2 },
   tgCmdText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 9, color: "#9ab3ce", lineHeight: 16 },
+  stratLabel: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 7, color: "#3d5470", letterSpacing: 2, textTransform: "uppercase" as const, marginBottom: 6 },
+  stratNote: { flexDirection: "row" as const, gap: 6, paddingVertical: 5, borderBottomWidth: 1, borderBottomColor: "#1a2d48" },
+  stratIcon: { fontSize: 12, width: 20 },
+  stratText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 9, color: "#9ab3ce", lineHeight: 14, flex: 1 },
+  stratLearning: { backgroundColor: "#121a2e", borderRadius: 7, padding: 9, marginBottom: 6 },
+  stratWr: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 10, fontWeight: "700" as const },
+  stratRec: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 8, color: "#3d5470", lineHeight: 13 },
+  stratMeta: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 8, color: "#3d5470", marginTop: 8, textAlign: "center" as const },
 });
