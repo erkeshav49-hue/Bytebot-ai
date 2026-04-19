@@ -1,6 +1,7 @@
 // ─── Server-Side Bot Engine ──────────────────────────────────────────────────
 // Runs the 45-second scan loop in the Node.js server process (24/7).
 // All state is kept in memory; the mobile app polls via tRPC.
+// Includes Telegram command handler so Groq AI responds to user messages.
 
 import type {
   BotConfig, BotStatus, BotStats, OpenTrade, TradeLogEntry,
@@ -8,7 +9,15 @@ import type {
 } from "../shared/bot-types";
 import { DEFAULT_CONFIG } from "../shared/bot-types";
 
-// ─── Indicator calculations (ported from lib/indicators.ts) ─────────────────
+// ─── Risk Presets ──────────────────────────────────────────────────────────────
+
+const PRESETS: Record<string, { sz: number; lv: number; tp: number; sl: number }> = {
+  low: { sz: 10, lv: 3, tp: 0.3, sl: 0.15 },
+  med: { sz: 20, lv: 5, tp: 0.5, sl: 0.25 },
+  high: { sz: 50, lv: 10, tp: 0.8, sl: 0.4 },
+};
+
+// ─── Indicator calculations ────────────────────────────────────────────────────
 
 interface Candle { o: number; h: number; l: number; c: number; v: number; }
 interface Indicators {
@@ -188,11 +197,18 @@ interface GroqDecision {
   warnings: string[];
 }
 
-async function askGroq(groqKey: string, sym: string, mkt: string, indicators: Indicators, htfTrend: string, ticker: { last: number; chg: number; vol: number }, newsHeadlines: string[], recentTrades: TradeLogEntry[]): Promise<GroqDecision> {
-  const newsCtx = newsHeadlines.length ? 'RECENT CRYPTO NEWS:\n' + newsHeadlines.slice(0, 4).map((h, i) => `${i + 1}. ${h}`).join('\n') : 'No news available.';
-  const tradeCtx = recentTrades.length ? 'RECENT TRADE HISTORY (learn from these):\n' + recentTrades.slice(0, 5).map(t => `- ${t.side.toUpperCase()} ${t.sym} [${t.mkt}]: P&L ${+t.pnl >= 0 ? '+' : ''}${t.pnl} USDT (${t.reason})`).join('\n') : 'No recent trades yet.';
+async function askGroq(groqKey: string, sym: string, mkt: string, indicators: Indicators, htfTrend: string, ticker: { last: number; chg: number; vol: number }, headlines: string[], recentTrades: TradeLogEntry[]): Promise<GroqDecision> {
+  const newsCtx = headlines.length ? 'RECENT CRYPTO NEWS (factor these into your analysis — bullish news supports longs, bearish news supports shorts or wait):\n' + headlines.slice(0, 6).map((h, i) => `${i + 1}. ${h}`).join('\n') : 'No news available.';
+  const tradeCtx = recentTrades.length ? 'RECENT TRADE HISTORY (learn from these — avoid repeating losing patterns):\n' + recentTrades.slice(0, 5).map(t => `- ${t.side.toUpperCase()} ${t.sym} [${t.mkt}]: P&L ${+t.pnl >= 0 ? '+' : ''}${t.pnl} USDT (${t.reason})`).join('\n') : 'No recent trades yet.';
 
-  const prompt = `You are an expert cryptocurrency scalping trader. Analyze this market data and return a trading decision as JSON only.
+  const prompt = `You are an expert cryptocurrency scalping trader. Analyze ALL the data below — technical indicators, higher timeframe trend, news sentiment, and recent trade history — then return a trading decision as JSON only.
+
+IMPORTANT RULES:
+- You MUST consider the NEWS section. Bullish news (ETF approvals, institutional buying, regulatory clarity) supports LONG. Bearish news (hacks, bans, crashes) supports SHORT or WAIT.
+- You MUST consider the HIGHER TIMEFRAME trend. Do NOT go against the HTF trend unless you have very strong reasons.
+- If you see recent losing trades, analyze WHY they lost and avoid the same pattern.
+- Only recommend "long" or "short" if confidence >= 60. Otherwise say "wait".
+- For spot market, you can ONLY recommend "long" or "wait" (no shorting spot).
 
 SYMBOL: ${sym} | MARKET: ${mkt.toUpperCase()} | TIMEFRAME: 5min
 PRICE: ${ticker.last} | 24H CHANGE: ${(ticker.chg * 100).toFixed(2)}% | VOLUME: ${(ticker.vol / 1e6).toFixed(1)}M USDT
@@ -201,9 +217,9 @@ TECHNICAL INDICATORS:
 EMA Status: ${indicators.ema.status}
 EMA-9: ${indicators.ema.e9} | EMA-21: ${indicators.ema.e21} | EMA-50: ${indicators.ema.e50}
 RSI(14): ${indicators.rsi.value} [${indicators.rsi.zone}]
-MACD: ${indicators.macd.h} [${indicators.macd.sig}]
+MACD Histogram: ${indicators.macd.h} [${indicators.macd.sig}]
 ADX: ${indicators.adx.adx} | +DI: ${indicators.adx.dp} | -DI: ${indicators.adx.dn}
-Bollinger: Position ${indicators.bb.pos_pct}% [${indicators.bb.pos_label}] | BW: ${indicators.bb.bw}% | Squeeze: ${indicators.bb.squeeze}
+Bollinger Bands: Position ${indicators.bb.pos_pct}% [${indicators.bb.pos_label}] | BW: ${indicators.bb.bw}% | Squeeze: ${indicators.bb.squeeze}
 ATR%: ${indicators.atr_pct}% | Volume Ratio: ${indicators.volume_ratio}x avg
 Last 5 Closes: ${indicators.last_5_closes.join(' > ')}
 
@@ -214,7 +230,7 @@ ${newsCtx}
 ${tradeCtx}
 
 Respond with ONLY this JSON, no other text:
-{"action":"long|short|wait","confidence":0-100,"reasoning":"2-3 sentences explaining your decision","key_factor":"single most decisive reason","risk_level":"low|medium|high","market_regime":"trending_up|trending_down|ranging|volatile|quiet","warnings":["any risk or concern"]}`;
+{"action":"long|short|wait","confidence":0-100,"reasoning":"2-3 sentences explaining your decision including how news affected it","key_factor":"single most decisive reason","risk_level":"low|medium|high","market_regime":"trending_up|trending_down|ranging|volatile|quiet","warnings":["any risk or concern"]}`;
 
   const body = JSON.stringify({
     model: 'llama-3.3-70b-versatile',
@@ -238,6 +254,32 @@ Respond with ONLY this JSON, no other text:
   return JSON.parse(text) as GroqDecision;
 }
 
+// ─── Groq AI: Answer any question (for Telegram /ask command) ───────────────
+
+async function askGroqQuestion(groqKey: string, question: string): Promise<string> {
+  try {
+    const body = JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      max_tokens: 500,
+      temperature: 0.3,
+      messages: [
+        { role: 'system', content: 'You are ByteBot AI, a helpful crypto trading assistant. Be brief, practical, and informative. Max 200 words. You can answer any question — crypto, trading, market analysis, general knowledge, or casual conversation. Be friendly and helpful.' },
+        { role: 'user', content: question },
+      ],
+    });
+    const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + groqKey },
+      body,
+    });
+    const data = await r.json();
+    if (data.error) return 'Groq error: ' + (data.error.message || 'unknown');
+    return data.choices[0].message.content.trim();
+  } catch (e: any) {
+    return 'Error: ' + (e.message || 'unknown');
+  }
+}
+
 // ─── Bot State (in-memory singleton) ────────────────────────────────────────
 
 let config: BotConfig = { ...DEFAULT_CONFIG };
@@ -257,6 +299,8 @@ let scanTimer: ReturnType<typeof setInterval> | null = null;
 let tickerTimer: ReturnType<typeof setInterval> | null = null;
 let newsTimer: ReturnType<typeof setInterval> | null = null;
 let countdownTimer: ReturnType<typeof setInterval> | null = null;
+let tgPollTimer: ReturnType<typeof setInterval> | null = null;
+let tgOffset = 0;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -283,7 +327,7 @@ function closeTrade(key: string, ep: number, pnl: number, reason: string) {
     reason, conf: t.conf, reasoning: t.reasoning || '',
   };
   tradeLog = [logEntry, ...tradeLog].slice(0, 200);
-  const tgMsg = (pnl > 0 ? '✅' : '❌') + ` <b>Trade Closed [${reason}]</b>\n${t.sym} ${t.side.toUpperCase()} [${t.mkt}]\nEntry: ${t.entry} → Exit: ${ep}\nP&L: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(3)} USDT`;
+  const tgMsg = (pnl > 0 ? '✅' : '❌') + ` <b>Trade Closed [${reason}]</b>\n${t.sym} ${t.side.toUpperCase()} [${t.mkt}]\nEntry: ${t.entry} → Exit: ${ep}\nP&L: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(3)} USDT\nTotal: ${stats.pnl >= 0 ? '+' : ''}${stats.pnl.toFixed(3)} USDT`;
   tgSend(config.tgt, config.tgc, tgMsg);
 }
 
@@ -340,7 +384,7 @@ async function openPosition(sym: string, mkt: string, cat: string, decision: Gro
   if (config.paper) {
     const trade: OpenTrade = { sym, mkt, cat, side: decision.action as 'long' | 'short', entry: price, qty, tp, sl, time: Date.now(), conf: decision.confidence, reasoning: decision.reasoning, key_factor: decision.key_factor, regime: decision.market_regime, paper: true };
     openTrades[key] = trade;
-    tgSend(config.tgt, config.tgc, `📄 <b>Paper Trade Opened</b>\n\n<b>${sym}</b> [${mkt.toUpperCase()}] ${decision.action.toUpperCase()}\nEntry: ${price} | TP: ${tp} | SL: ${sl}\nConfidence: ${decision.confidence}%\n\n🧠 <b>Groq AI Reasoning:</b>\n${decision.reasoning}\n\n💡 ${decision.key_factor}\n\n<i>This is a simulated paper trade — no real money used.</i>`);
+    tgSend(config.tgt, config.tgc, `📄 <b>Paper Trade Opened</b>\n\n<b>${sym}</b> [${mkt.toUpperCase()}] ${decision.action.toUpperCase()}\nEntry: ${price} | TP: ${tp} | SL: ${sl}\nSize: ${usdt.toFixed(0)} USDT | Lev: ${lev}×\nConfidence: ${decision.confidence}%\n\n🧠 <b>Groq AI Reasoning:</b>\n${decision.reasoning}\n\n💡 ${decision.key_factor}\n\n<i>This is a simulated paper trade — no real money used.</i>`);
     return;
   }
 
@@ -349,11 +393,17 @@ async function openPosition(sym: string, mkt: string, cat: string, decision: Gro
   if (cat === 'linear') { body.takeProfit = '' + tp; body.stopLoss = '' + sl; body.tpslMode = 'Full'; }
   try {
     const resp = await placeOrder(base, config.key, config.secret, body);
-    if (resp.retCode !== 0) return;
+    if (resp.retCode !== 0) {
+      console.log('[BotEngine] Order failed:', resp.retMsg);
+      tgSend(config.tgt, config.tgc, `⚠️ <b>Order Failed</b>\n${sym} ${decision.action.toUpperCase()} [${mkt}]\nError: ${resp.retMsg || 'Unknown'}`);
+      return;
+    }
     const trade: OpenTrade = { sym, mkt, cat, side: decision.action as 'long' | 'short', entry: price, qty, tp, sl, time: Date.now(), conf: decision.confidence, reasoning: decision.reasoning, key_factor: decision.key_factor, regime: decision.market_regime };
     openTrades[key] = trade;
-    tgSend(config.tgt, config.tgc, `${decision.action === 'long' ? '🟢' : '🔴'} <b>AI Trade Opened</b>\n\n<b>${sym}</b> [${mkt.toUpperCase()}] ${decision.action.toUpperCase()}\nEntry: ${price} | TP: ${tp} | SL: ${sl}\nConfidence: ${decision.confidence}%\n\n🧠 <b>Groq AI Reasoning:</b>\n${decision.reasoning}\n\n💡 ${decision.key_factor}`);
-  } catch { /* silent */ }
+    tgSend(config.tgt, config.tgc, `${decision.action === 'long' ? '🟢' : '🔴'} <b>AI Trade Opened</b>\n\n<b>${sym}</b> [${mkt.toUpperCase()}] ${decision.action.toUpperCase()}\nEntry: ${price} | TP: ${tp} | SL: ${sl}\nSize: ${usdt.toFixed(0)} USDT | Lev: ${lev}×\nConfidence: ${decision.confidence}%\n\n🧠 <b>Groq AI Reasoning:</b>\n${decision.reasoning}\n\n💡 ${decision.key_factor}`);
+  } catch (e: any) {
+    tgSend(config.tgt, config.tgc, `⚠️ <b>Order Error</b>\n${sym} ${decision.action.toUpperCase()}\n${e.message || 'Network error'}`);
+  }
 }
 
 // ─── Core scan loop ─────────────────────────────────────────────────────────
@@ -415,13 +465,223 @@ async function refreshTickers() {
 }
 
 async function fetchNews() {
+  const headlines: string[] = [];
+  // Source 1: CryptoCompare
   try {
-    const r = await fetch('https://min-api.cryptocompare.com/data/v2/news/?lang=EN&categories=BTC,ETH&limit=5');
+    const r = await fetch('https://min-api.cryptocompare.com/data/v2/news/?lang=EN&categories=BTC,ETH&limit=6');
     const d = await r.json();
-    newsHeadlines = (d.Data || []).slice(0, 5).map((n: any) => n.title);
-  } catch {
+    const items = (d.Data || []).slice(0, 6).map((n: any) => n.title);
+    headlines.push(...items);
+  } catch { /* silent */ }
+
+  // Source 2: CoinGecko trending / status (free, no key)
+  try {
+    const r = await fetch('https://api.coingecko.com/api/v3/search/trending');
+    const d = await r.json();
+    const coins = (d.coins || []).slice(0, 3).map((c: any) => `Trending: ${c.item?.name || 'Unknown'} (${c.item?.symbol || '?'}) — Market Cap Rank #${c.item?.market_cap_rank || '?'}`);
+    headlines.push(...coins);
+  } catch { /* silent */ }
+
+  if (headlines.length > 0) {
+    newsHeadlines = headlines.slice(0, 8);
+  } else {
     newsHeadlines = ['Unable to fetch news — AI will use price data only'];
   }
+}
+
+// ─── Telegram Polling & Command Handler ─────────────────────────────────────
+
+async function pollTelegram() {
+  if (!config.tgt || !config.tgc) return;
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${config.tgt}/getUpdates?offset=${tgOffset}&limit=10&timeout=0`);
+    const d = await r.json();
+    for (const u of (d.result || [])) {
+      tgOffset = u.update_id + 1;
+      const msg = u.message || {};
+      if ('' + ((msg.chat || {}).id || '') !== config.tgc || !msg.text) continue;
+      await handleTelegramCommand(msg.text.trim());
+    }
+  } catch (e) { /* silent */ }
+}
+
+async function handleTelegramCommand(text: string) {
+  const pts = text.split(/\s+/);
+  const cmd = pts[0].replace('/', '').replace(/@.*/, '').toLowerCase();
+  const args = pts.slice(1);
+  const wr = stats.trades ? ((stats.wins / stats.trades) * 100).toFixed(0) + '%' : '—';
+
+  switch (cmd) {
+    case 'start':
+    case 'help':
+      tgSend(config.tgt, config.tgc,
+        '🤖 <b>ByteBot AI Commands</b>\n\n' +
+        '<b>Info</b>\n/status · /positions · /trades · /balance\n/ask &lt;question&gt;\n\n' +
+        '<b>Control</b>\n/startbot · /stopbot · /pause · /resume\n\n' +
+        '<b>Settings</b>\n/size &lt;n&gt; · /tp &lt;%&gt; · /sl &lt;%&gt;\n/leverage &lt;n&gt; · /confidence &lt;%&gt;\n/risk low|med|high · /settings\n\n' +
+        '<i>Or just type any message and Groq AI will respond!</i>');
+      break;
+
+    case 'status':
+      tgSend(config.tgt, config.tgc,
+        '📊 <b>Status</b>\n' +
+        `State: ${status !== 'offline' ? (paused ? '⏸ PAUSED' : '🧠 RUNNING') : '⏹ STOPPED'}\n` +
+        `Mode: ${config.paper ? '📄 PAPER' : config.testnet ? 'TESTNET 🔵' : '⚠️ LIVE 🔴'}\n` +
+        `Scans: ${scanCount} | Open: ${Object.keys(openTrades).length}\n` +
+        `P&L: ${stats.pnl >= 0 ? '+' : ''}${stats.pnl.toFixed(3)} USDT\n` +
+        `Trades: ${stats.trades} | Win: ${wr}\n` +
+        `Size: ${config.sz} USDT | Lev: ${config.lv}× | MinConf: ${config.mc || 65}%`);
+      break;
+
+    case 'positions': {
+      const ks = Object.keys(openTrades);
+      if (!ks.length) { tgSend(config.tgt, config.tgc, '📭 No open positions'); break; }
+      tgSend(config.tgt, config.tgc,
+        '📈 <b>Positions</b>\n' + ks.map(k => {
+          const t = openTrades[k];
+          return `\n<b>${t.sym}</b> [${t.mkt}] ${t.side === 'long' ? '🟢 LONG' : '🔴 SHORT'}\nEntry: ${t.entry} | TP: ${t.tp} | SL: ${t.sl}\nConf: ${t.conf}% | ${(t.reasoning || '').slice(0, 80)}...`;
+        }).join(''));
+      break;
+    }
+
+    case 'trades':
+      if (!tradeLog.length) { tgSend(config.tgt, config.tgc, '📭 No trades yet'); break; }
+      tgSend(config.tgt, config.tgc,
+        '📋 <b>Last 5 Trades</b>\n' + tradeLog.slice(0, 5).map(t =>
+          `${+t.pnl > 0 ? '✅' : '❌'} ${t.sym} ${t.side.toUpperCase()} → ${+t.pnl >= 0 ? '+' : ''}${t.pnl} USDT`
+        ).join('\n'));
+      break;
+
+    case 'ask': {
+      const q = args.join(' ');
+      if (!q) { tgSend(config.tgt, config.tgc, 'Usage: /ask &lt;question&gt;'); break; }
+      tgSend(config.tgt, config.tgc, '🧠 Asking Groq AI: "' + q + '"...');
+      if (!config.groq) { tgSend(config.tgt, config.tgc, '⚠️ Groq API key not set. Add it in Settings.'); break; }
+      const answer = await askGroqQuestion(config.groq, q);
+      tgSend(config.tgt, config.tgc, '🧠 <b>Groq AI says:</b>\n\n' + answer);
+      break;
+    }
+
+    case 'balance':
+      if (!config.key || !config.secret) {
+        tgSend(config.tgt, config.tgc, '⚠️ Bybit API keys not set');
+        break;
+      }
+      try {
+        const base = getBase(config.testnet);
+        const d = await apiGet(base, config.key, config.secret, '/v5/account/wallet-balance', { accountType: 'UNIFIED' });
+        const coins = ((d.result?.list?.[0]?.coin || []) as any[]).filter((c: any) => +c.walletBalance > 0);
+        tgSend(config.tgt, config.tgc,
+          '💰 <b>Balance</b>\n' + (coins.length ? coins.map((c: any) => c.coin + ': ' + parseFloat(c.walletBalance).toFixed(4)).join('\n') : 'No balance found'));
+      } catch {
+        tgSend(config.tgt, config.tgc, '⚠️ Could not fetch balance');
+      }
+      break;
+
+    case 'startbot':
+      if (status !== 'offline') { tgSend(config.tgt, config.tgc, '⚠️ Already running'); break; }
+      botStart();
+      break;
+
+    case 'stopbot':
+      if (status === 'offline') { tgSend(config.tgt, config.tgc, '⚠️ Already stopped'); break; }
+      botStop();
+      break;
+
+    case 'pause':
+      paused = true;
+      tgSend(config.tgt, config.tgc, '⏸ Paused — /resume to re-enable entries');
+      break;
+
+    case 'resume':
+      paused = false;
+      tgSend(config.tgt, config.tgc, '▶️ Resumed');
+      break;
+
+    case 'size': {
+      const sz = +args[0];
+      if (!sz || sz < 5) { tgSend(config.tgt, config.tgc, 'Usage: /size &lt;usdt&gt; (min 5)'); break; }
+      config.sz = sz;
+      tgSend(config.tgt, config.tgc, '✅ Size → ' + sz + ' USDT');
+      break;
+    }
+
+    case 'tp': {
+      const tp2 = +args[0];
+      if (!tp2) { tgSend(config.tgt, config.tgc, 'Usage: /tp &lt;%&gt;'); break; }
+      config.tp = tp2;
+      tgSend(config.tgt, config.tgc, '✅ TP → ' + tp2 + '%');
+      break;
+    }
+
+    case 'sl': {
+      const sl2 = +args[0];
+      if (!sl2) { tgSend(config.tgt, config.tgc, 'Usage: /sl &lt;%&gt;'); break; }
+      config.sl = sl2;
+      tgSend(config.tgt, config.tgc, '✅ SL → ' + sl2 + '%');
+      break;
+    }
+
+    case 'leverage': {
+      const lv = +args[0];
+      if (!lv || lv < 1 || lv > 50) { tgSend(config.tgt, config.tgc, 'Usage: /leverage &lt;1-50&gt;'); break; }
+      config.lv = lv;
+      tgSend(config.tgt, config.tgc, '✅ Leverage → ' + lv + '×');
+      break;
+    }
+
+    case 'confidence': {
+      const mc = +args[0];
+      if (!mc || mc < 1 || mc > 100) { tgSend(config.tgt, config.tgc, 'Usage: /confidence &lt;1-100&gt;'); break; }
+      config.mc = mc;
+      tgSend(config.tgt, config.tgc, '✅ Min confidence → ' + mc + '%');
+      break;
+    }
+
+    case 'risk': {
+      const pn = (args[0] || '').toLowerCase();
+      if (!PRESETS[pn]) { tgSend(config.tgt, config.tgc, 'Options: /risk low|med|high'); break; }
+      const pr = PRESETS[pn];
+      config.sz = pr.sz; config.lv = pr.lv; config.tp = pr.tp; config.sl = pr.sl;
+      tgSend(config.tgt, config.tgc, `✅ Risk preset ${pn.toUpperCase()}\nSize: ${pr.sz} | Lev: ${pr.lv}× | TP: ${pr.tp}% | SL: ${pr.sl}%`);
+      break;
+    }
+
+    case 'settings':
+      tgSend(config.tgt, config.tgc,
+        '⚙️ <b>Settings</b>\n' +
+        `Mode: ${config.paper ? '📄 PAPER' : config.testnet ? 'TESTNET' : 'LIVE'}\n` +
+        `Size: ${config.sz} USDT | Lev: ${config.lv}×\n` +
+        `TP: ${config.tp}% | SL: ${config.sl}%\n` +
+        `Min confidence: ${config.mc || 65}% | Max open: ${config.mx || 2}`);
+      break;
+
+    default:
+      // Any non-command message → forward to Groq AI as a question
+      if (text.startsWith('/')) {
+        tgSend(config.tgt, config.tgc, 'Unknown command. Send /help for all commands.');
+      } else {
+        // User sent a regular message — let Groq AI respond
+        if (!config.groq) {
+          tgSend(config.tgt, config.tgc, '⚠️ Groq API key not set. Add it in Settings to chat with AI.');
+          break;
+        }
+        tgSend(config.tgt, config.tgc, '🧠 Thinking...');
+        const answer = await askGroqQuestion(config.groq, text);
+        tgSend(config.tgt, config.tgc, '🧠 <b>ByteBot AI:</b>\n\n' + answer);
+      }
+      break;
+  }
+}
+
+function startTGPoll() {
+  if (tgPollTimer) clearInterval(tgPollTimer);
+  tgPollTimer = setInterval(pollTelegram, 3000);
+  console.log('[BotEngine] Telegram polling started (every 3s)');
+}
+
+function stopTGPoll() {
+  if (tgPollTimer) { clearInterval(tgPollTimer); tgPollTimer = null; }
 }
 
 // ─── Public API ─────────────────────────────────────────────────────────────
@@ -442,8 +702,15 @@ export function botGetConfig(): BotConfig {
 }
 
 export function botSetConfig(newConfig: BotConfig) {
+  const oldTgt = config.tgt;
+  const oldTgc = config.tgc;
   config = { ...newConfig };
   console.log('[BotEngine] Config updated');
+
+  // If Telegram credentials changed, restart polling
+  if (config.tgt && config.tgc && (config.tgt !== oldTgt || config.tgc !== oldTgc)) {
+    startTGPoll();
+  }
 }
 
 export function botStart(): { error: string | null } {
@@ -454,7 +721,7 @@ export function botStart(): { error: string | null } {
   status = 'running';
   paused = false;
   console.log('[BotEngine] Starting bot...');
-  tgSend(config.tgt, config.tgc, `🤖 <b>ByteBot AI Started (Server-Side 24/7)</b>\nMode: ${config.paper ? '📄 PAPER TRADING (simulated)' : config.testnet ? 'TESTNET 🔵' : 'LIVE 🔴'}\nBrain: Groq llama-3.3-70b (FREE)\nMin confidence: ${config.mc || 65}%\n\nThe bot runs on the server — you can close the app. 🚀`);
+  tgSend(config.tgt, config.tgc, `🤖 <b>ByteBot AI Started (Server-Side 24/7)</b>\nMode: ${config.paper ? '📄 PAPER TRADING (simulated)' : config.testnet ? 'TESTNET 🔵' : 'LIVE 🔴'}\nBrain: Groq llama-3.3-70b (FREE)\nMin confidence: ${config.mc || 65}%\n\nThe bot runs on the server — you can close the app.\nSend /help for commands 🚀`);
 
   // Initial scan + ticker + news
   doScan();
@@ -475,8 +742,13 @@ export function botStart(): { error: string | null } {
   // Ticker refresh every 10s
   tickerTimer = setInterval(refreshTickers, 10000);
 
-  // News refresh every 5 min
-  newsTimer = setInterval(fetchNews, 300000);
+  // News refresh every 2 min (matching original)
+  newsTimer = setInterval(fetchNews, 120000);
+
+  // Start Telegram polling (reads incoming messages)
+  if (config.tgt && config.tgc) {
+    startTGPoll();
+  }
 
   return { error: null };
 }
@@ -488,6 +760,7 @@ export function botStop() {
   if (scanTimer) { clearInterval(scanTimer); scanTimer = null; }
   if (tickerTimer) { clearInterval(tickerTimer); tickerTimer = null; }
   if (newsTimer) { clearInterval(newsTimer); newsTimer = null; }
+  stopTGPoll();
   console.log('[BotEngine] Bot stopped');
   tgSend(config.tgt, config.tgc, '⏹ <b>ByteBot AI Stopped</b>');
 }

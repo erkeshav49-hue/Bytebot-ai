@@ -30,11 +30,9 @@ describe('Bot Engine - Server Side', () => {
 
   it('botGetSnapshot strips sensitive config keys', () => {
     const snap = botGetSnapshot();
-    // config in snapshot should NOT have groq, key, secret
     expect((snap.config as any).groq).toBeUndefined();
     expect((snap.config as any).key).toBeUndefined();
     expect((snap.config as any).secret).toBeUndefined();
-    // but should have other config fields
     expect(snap.config).toHaveProperty('paper');
     expect(snap.config).toHaveProperty('testnet');
     expect(snap.config).toHaveProperty('sz');
@@ -57,7 +55,6 @@ describe('Bot Engine - Server Side', () => {
     expect(cfg.groq).toBe('test_key_123');
     expect(cfg.sz).toBe(100);
     expect(cfg.mc).toBe(80);
-    // Reset
     botSetConfig({ ...DEFAULT_CONFIG });
   });
 
@@ -65,7 +62,6 @@ describe('Bot Engine - Server Side', () => {
     botSetConfig({ ...DEFAULT_CONFIG, groq: '' });
     const result = botStart();
     expect(result.error).toBe('Add Groq API key in Settings');
-    // Reset
     botSetConfig({ ...DEFAULT_CONFIG });
   });
 
@@ -104,6 +100,24 @@ describe('Bot Engine - Server Side', () => {
     expect(snap.status).toBe('offline');
     expect(snap.nextScanIn).toBe(0);
   });
+
+  it('config preserves Telegram settings for polling', () => {
+    botSetConfig({ ...DEFAULT_CONFIG, tgt: 'bot123:ABC', tgc: '12345' });
+    const cfg = botGetConfig();
+    expect(cfg.tgt).toBe('bot123:ABC');
+    expect(cfg.tgc).toBe('12345');
+    botSetConfig({ ...DEFAULT_CONFIG });
+  });
+
+  it('config preserves risk preset values', () => {
+    botSetConfig({ ...DEFAULT_CONFIG, sz: 50, lv: 10, tp: 0.8, sl: 0.4 });
+    const cfg = botGetConfig();
+    expect(cfg.sz).toBe(50);
+    expect(cfg.lv).toBe(10);
+    expect(cfg.tp).toBe(0.8);
+    expect(cfg.sl).toBe(0.4);
+    botSetConfig({ ...DEFAULT_CONFIG });
+  });
 });
 
 describe('Shared Bot Types', () => {
@@ -117,5 +131,16 @@ describe('Shared Bot Types', () => {
     expect(DEFAULT_CONFIG.lv).toBe(5);
     expect(DEFAULT_CONFIG.mc).toBe(65);
     expect(DEFAULT_CONFIG.p).toEqual({ bs: true, es: true, bf: true, ef: true });
+  });
+
+  it('DEFAULT_CONFIG has empty Telegram credentials', () => {
+    expect(DEFAULT_CONFIG.tgt).toBe('');
+    expect(DEFAULT_CONFIG.tgc).toBe('');
+  });
+
+  it('DEFAULT_CONFIG has empty API keys', () => {
+    expect(DEFAULT_CONFIG.groq).toBe('');
+    expect(DEFAULT_CONFIG.key).toBe('');
+    expect(DEFAULT_CONFIG.secret).toBe('');
   });
 });

@@ -239,6 +239,23 @@ export default function DashboardScreen() {
           )}
         </View>
 
+        {/* Telegram Commands */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>TELEGRAM COMMANDS</Text>
+          <View style={styles.tgCmdBlock}>
+            <Text style={styles.tgCmdGroup}>Info</Text>
+            <Text style={styles.tgCmdText}>/status  /positions  /trades  /balance</Text>
+            <Text style={styles.tgCmdText}>/ask {"<"}question{">"}  (ask Groq AI anything)</Text>
+            <Text style={styles.tgCmdGroup}>Control</Text>
+            <Text style={styles.tgCmdText}>/startbot  /stopbot  /pause  /resume</Text>
+            <Text style={styles.tgCmdGroup}>Settings</Text>
+            <Text style={styles.tgCmdText}>/size  /tp  /sl  /leverage  /confidence</Text>
+            <Text style={styles.tgCmdText}>/risk low|med|high  /settings</Text>
+            <Text style={[styles.tgCmdGroup, { color: "#a855f7" }]}>AI Chat</Text>
+            <Text style={styles.tgCmdText}>Just type any message and Groq AI will respond!</Text>
+          </View>
+        </View>
+
         {/* AI Decisions */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>GROQ AI DECISIONS</Text>
@@ -320,4 +337,7 @@ const styles = StyleSheet.create({
   keyFactorText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 9, color: "#ffbe30" },
   warnText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 9, color: "#ff4060", marginTop: 4 },
   emptyText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 10, color: "#3d5470", textAlign: "center", paddingVertical: 12 },
+  tgCmdBlock: { paddingVertical: 4 },
+  tgCmdGroup: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 9, color: "#00f5a0", fontWeight: "700", marginTop: 6, marginBottom: 2 },
+  tgCmdText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 9, color: "#9ab3ce", lineHeight: 16 },
 });

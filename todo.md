@@ -29,3 +29,9 @@
 - [x] Update mobile app Positions/Log to fetch from server
 - [x] Remove client-side bot engine (use-bot-engine.ts) in favor of server API
 - [x] Write and pass unit tests for server-side bot engine (20 tests passing)
+- [x] Verify order open/close lifecycle (TP/SL auto-close works correctly)
+- [x] Fix news fetching — enhanced with CryptoCompare + CoinGecko trending, 2-min refresh, fed to Groq prompt
+- [x] Verify trade parameters are correctly enforced (TP%, SL%, leverage, order size, min confidence)
+- [x] Ensure AI decides when to enter and exit trades (AI analyzes indicators + news + trade history)
+- [x] Add Telegram bot command handler — full command set: /help /status /positions /trades /balance /ask /startbot /stopbot /pause /resume /size /tp /sl /leverage /confidence /risk /settings
+- [x] Groq responds to any message in Telegram — not just commands, any text triggers Groq AI response
