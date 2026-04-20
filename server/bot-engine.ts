@@ -141,15 +141,41 @@ async function apiGet(base: string, apiKey: string, apiSecret: string, path: str
   return r.json();
 }
 
-async function fetchKlines(base: string, sym: string, cat: string, interval = '5', limit = 80): Promise<Candle[]> {
-  const d = await pubGet(base, '/v5/market/kline', { category: cat, symbol: sym, interval, limit: String(limit) });
-  return ((d.result?.list || []) as string[][]).slice().reverse().map(r => ({ o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] }));
+// OKX public price feed (Bybit/Binance are geo-blocked from Replit servers)
+function toOkxSymbol(sym: string, cat: string): string {
+  const m = sym.match(/^([A-Z0-9]+?)(USDT|USDC|BTC|ETH)$/);
+  const base = m ? m[1] : sym.replace(/USDT$/, '');
+  const quote = m ? m[2] : 'USDT';
+  const pair = `${base}-${quote}`;
+  return cat === 'linear' || cat === 'inverse' ? `${pair}-SWAP` : pair;
 }
 
-async function fetchTicker(base: string, sym: string, cat: string): Promise<{ last: number; chg: number; vol: number } | null> {
-  const d = await pubGet(base, '/v5/market/tickers', { category: cat, symbol: sym });
-  const t = d.result?.list?.[0];
-  return t ? { last: +t.lastPrice, chg: +t.price24hPcnt, vol: +t.volume24h } : null;
+function toOkxBar(interval: string): string {
+  const map: Record<string, string> = { '1': '1m', '3': '3m', '5': '5m', '15': '15m', '20': '15m', '30': '30m', '60': '1H', '120': '2H', '240': '4H', '360': '6H', '720': '12H', 'D': '1D', 'W': '1W' };
+  return map[interval] || (interval.match(/^\d+$/) ? interval + 'm' : interval);
+}
+
+async function fetchKlines(_base: string, sym: string, cat: string, interval = '5', limit = 80): Promise<Candle[]> {
+  const instId = toOkxSymbol(sym, cat);
+  const bar = toOkxBar(interval);
+  const r = await fetch(`https://www.okx.com/api/v5/market/candles?instId=${instId}&bar=${bar}&limit=${limit}`);
+  if (!r.ok) throw new Error(`OKX candles HTTP ${r.status}`);
+  const d = await r.json();
+  if (d.code !== '0') throw new Error(`OKX candles: ${d.msg || 'error'}`);
+  // OKX returns newest first; reverse to oldest first like Bybit. Format: [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]
+  return ((d.data || []) as string[][]).slice().reverse().map(row => ({ o: +row[1], h: +row[2], l: +row[3], c: +row[4], v: +row[5] }));
+}
+
+async function fetchTicker(_base: string, sym: string, cat: string): Promise<{ last: number; chg: number; vol: number } | null> {
+  const instId = toOkxSymbol(sym, cat);
+  const r = await fetch(`https://www.okx.com/api/v5/market/ticker?instId=${instId}`);
+  if (!r.ok) return null;
+  const d = await r.json();
+  if (d.code !== '0' || !d.data?.[0]) return null;
+  const t = d.data[0];
+  const open24 = +t.open24h, last = +t.last;
+  const chg = open24 ? (last - open24) / open24 : 0;
+  return { last, chg, vol: +t.vol24h };
 }
 
 async function fetchPositions(base: string, apiKey: string, apiSecret: string) {
