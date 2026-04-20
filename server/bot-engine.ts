@@ -261,12 +261,75 @@ interface GroqDecision {
   warnings: string[];
 }
 
+// ─── Label helpers: add human-readable context to numeric indicators ─────────
+function rsiLabel(v: number): string {
+  if (v >= 75) return 'EXTREME OVERBOUGHT — reversal risk';
+  if (v >= 70) return 'OVERBOUGHT — caution for longs';
+  if (v >= 60) return 'BULLISH momentum — room to run';
+  if (v >= 45) return 'NEUTRAL';
+  if (v >= 30) return 'BEARISH momentum';
+  if (v >= 25) return 'OVERSOLD — bounce possible';
+  return 'EXTREME OVERSOLD — reversal possible';
+}
+function macdLabel(h: number, sig: string): string {
+  if (h > 0 && sig === 'bullish') return 'POSITIVE & RISING — bullish momentum building';
+  if (h > 0) return 'POSITIVE — bullish but slowing';
+  if (h < 0 && sig === 'bearish') return 'NEGATIVE & FALLING — bearish momentum building';
+  if (h < 0) return 'NEGATIVE — bearish but slowing';
+  return 'FLAT — no momentum';
+}
+function adxLabel(v: number): string {
+  if (v >= 40) return 'VERY STRONG TREND';
+  if (v >= 25) return 'STRONG TREND — tradeable';
+  if (v >= 20) return 'DEVELOPING TREND';
+  return 'WEAK / RANGING — chop risk';
+}
+function bbLabel(pct: number, squeeze: string): string {
+  let pos = 'MIDDLE';
+  if (pct >= 90) pos = 'AT UPPER BAND — extension risk';
+  else if (pct >= 70) pos = 'NEAR UPPER BAND';
+  else if (pct <= 10) pos = 'AT LOWER BAND — bounce zone';
+  else if (pct <= 30) pos = 'NEAR LOWER BAND';
+  return squeeze === 'true' || squeeze === 'yes' ? `${pos} | SQUEEZE — breakout pending` : pos;
+}
+function volLabel(r: number): string {
+  if (r >= 2) return 'HIGH PARTICIPATION — strong move';
+  if (r >= 1.3) return 'ABOVE AVERAGE';
+  if (r >= 0.7) return 'NORMAL';
+  return 'LOW VOLUME — weak conviction';
+}
+function atrLabel(p: number): string {
+  if (p >= 4) return 'EXTREME VOLATILITY';
+  if (p >= 2) return 'HIGH VOLATILITY';
+  if (p >= 0.8) return 'NORMAL';
+  if (p >= 0.3) return 'LOW VOLATILITY';
+  return 'DEAD MARKET — no edge';
+}
+
+// Robust JSON extractor: handles markdown fences, leading/trailing text, etc.
+function safeParseJSON<T = any>(text: string): T {
+  let s = (text || '').trim().replace(/```json|```/gi, '').trim();
+  const start = s.indexOf('{');
+  const end = s.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error('No JSON object found in response');
+  }
+  return JSON.parse(s.substring(start, end + 1));
+}
+
 async function askGroq(groqKey: string, sym: string, mkt: string, indicators: Indicators, htfTrend: string, ticker: { last: number; chg: number; vol: number }, headlines: string[], recentTrades: TradeLogEntry[]): Promise<GroqDecision> {
   const newsCtx = headlines.length ? 'RECENT CRYPTO NEWS (factor these into your analysis — bullish news supports longs, bearish news supports shorts or wait):\n' + headlines.slice(0, 6).map((h, i) => `${i + 1}. ${h}`).join('\n') : 'No news available.';
   const tradeCtx = recentTrades.length ? 'RECENT TRADE HISTORY (learn from these — avoid repeating losing patterns):\n' + recentTrades.slice(0, 5).map(t => `- ${t.side.toUpperCase()} ${t.sym} [${t.mkt}]: P&L ${+t.pnl >= 0 ? '+' : ''}${t.pnl} USDT (${t.reason})`).join('\n') : 'No recent trades yet.';
 
   const stratCtx = getStrategyContext();
-  const prompt = `You are an expert cryptocurrency scalping trader. Analyze ALL the data below — technical indicators, higher timeframe trend, news sentiment, recent trade history, AND strategy notes — then return a trading decision as JSON only.
+  const rsiV = +indicators.rsi.value;
+  const macdH = +indicators.macd.h;
+  const adxV = +indicators.adx.adx;
+  const bbPct = +indicators.bb.pos_pct;
+  const volR = +indicators.volume_ratio;
+  const atrP = +indicators.atr_pct;
+
+  const prompt = `You are an expert cryptocurrency scalping trader. Analyze ALL data below — technical indicators, higher timeframe trend, news sentiment, recent trade history, AND strategy notes — then return a trading decision as JSON only.
 
 IMPORTANT RULES:
 - You MUST follow USER STRATEGY INSTRUCTIONS if any are provided below. These are direct orders from the user.
@@ -274,22 +337,31 @@ IMPORTANT RULES:
 - You MUST consider the NEWS section. Bullish news (ETF approvals, institutional buying, regulatory clarity) supports LONG. Bearish news (hacks, bans, crashes) supports SHORT or WAIT.
 - You MUST consider the HIGHER TIMEFRAME trend. Do NOT go against the HTF trend unless you have very strong reasons.
 - If you see recent losing trades, analyze WHY they lost and avoid the same pattern.
-- Only recommend "long" or "short" if confidence >= 60. Otherwise say "wait".
+- Only recommend "long" or "short" if confidence >= 65. Otherwise say "wait".
 - For spot market, you can ONLY recommend "long" or "wait" (no shorting spot).
+
+INTERNAL REASONING PROCESS (think through these silently before producing JSON — do NOT include this thinking in your output):
+1. What is the higher timeframe trend saying? (Aligns or conflicts with my entry?)
+2. Do the indicators agree with each other? (EMA + MACD + RSI same direction?)
+3. Does news sentiment support or contradict the technical setup?
+4. What did recent losing trades have in common? Am I about to repeat that pattern?
+5. Is volatility (ATR%) appropriate — not too dead, not too wild?
+6. Final confidence: how many independent factors agree? (3+ aligned = high conf)
 
 ${stratCtx}
 
 SYMBOL: ${sym} | MARKET: ${mkt.toUpperCase()} | TIMEFRAME: 5min
 PRICE: ${ticker.last} | 24H CHANGE: ${(ticker.chg * 100).toFixed(2)}% | VOLUME: ${(ticker.vol / 1e6).toFixed(1)}M USDT
 
-TECHNICAL INDICATORS:
-EMA Status: ${indicators.ema.status}
-EMA-9: ${indicators.ema.e9} | EMA-21: ${indicators.ema.e21} | EMA-50: ${indicators.ema.e50}
-RSI(14): ${indicators.rsi.value} [${indicators.rsi.zone}]
-MACD Histogram: ${indicators.macd.h} [${indicators.macd.sig}]
-ADX: ${indicators.adx.adx} | +DI: ${indicators.adx.dp} | -DI: ${indicators.adx.dn}
-Bollinger Bands: Position ${indicators.bb.pos_pct}% [${indicators.bb.pos_label}] | BW: ${indicators.bb.bw}% | Squeeze: ${indicators.bb.squeeze}
-ATR%: ${indicators.atr_pct}% | Volume Ratio: ${indicators.volume_ratio}x avg
+TECHNICAL INDICATORS (with context labels):
+EMA Stack: ${indicators.ema.status.toUpperCase()}
+  EMA-9: ${indicators.ema.e9} | EMA-21: ${indicators.ema.e21} | EMA-50: ${indicators.ema.e50}
+RSI(14): ${rsiV.toFixed(1)} [${rsiLabel(rsiV)}]
+MACD Histogram: ${macdH > 0 ? '+' : ''}${macdH} [${macdLabel(macdH, indicators.macd.sig)}]
+ADX: ${adxV.toFixed(1)} [${adxLabel(adxV)}] | +DI: ${indicators.adx.dp} | -DI: ${indicators.adx.dn}
+Bollinger: Position ${bbPct.toFixed(0)}% [${bbLabel(bbPct, String(indicators.bb.squeeze))}] | BW: ${indicators.bb.bw}%
+ATR%: ${atrP.toFixed(2)}% [${atrLabel(atrP)}]
+Volume Ratio: ${volR.toFixed(2)}x [${volLabel(volR)}]
 Last 5 Closes: ${indicators.last_5_closes.join(' > ')}
 
 HIGHER TIMEFRAME (20min): ${htfTrend}
@@ -298,8 +370,8 @@ ${newsCtx}
 
 ${tradeCtx}
 
-Respond with ONLY this JSON, no other text:
-{"action":"long|short|wait","confidence":0-100,"reasoning":"2-3 sentences explaining your decision including how news affected it","key_factor":"single most decisive reason","risk_level":"low|medium|high","market_regime":"trending_up|trending_down|ranging|volatile|quiet","warnings":["any risk or concern"]}`;
+Respond with ONLY this JSON object — no markdown, no backticks, no explanation outside JSON. Start with { and end with }:
+{"action":"long|short|wait","confidence":0-100,"reasoning":"2-3 sentences explaining decision including how news + HTF affected it","key_factor":"single most decisive reason","risk_level":"low|medium|high","market_regime":"trending_up|trending_down|ranging|volatile|quiet","warnings":["any risk or concern"]}`;
 
   const body = JSON.stringify({
     model: 'llama-3.3-70b-versatile',
@@ -307,7 +379,7 @@ Respond with ONLY this JSON, no other text:
     temperature: 0.1,
     response_format: { type: 'json_object' },
     messages: [
-      { role: 'system', content: 'You are an expert cryptocurrency scalp trader. Respond with ONLY valid JSON. No markdown, no explanation, no extra text.' },
+      { role: 'system', content: 'You are a crypto trading analyst. Output ONLY a single valid JSON object. No markdown. No backticks. No explanation outside JSON. Start with { and end with }. Think through your reasoning internally but never expose chain-of-thought in the response.' },
       { role: 'user', content: prompt },
     ],
   });
@@ -317,12 +389,11 @@ Respond with ONLY this JSON, no other text:
   if (typeof rawContent !== 'string' || !rawContent.trim()) {
     throw new Error('Groq returned empty response');
   }
-  const text = rawContent.trim().replace(/```json|```/g, '').trim();
   try {
-    return JSON.parse(text) as GroqDecision;
-  } catch {
-    const snippet = text.slice(0, 80).replace(/\s+/g, ' ');
-    throw new Error('Groq returned invalid JSON content: ' + snippet);
+    return safeParseJSON<GroqDecision>(rawContent);
+  } catch (e: any) {
+    const snippet = rawContent.slice(0, 100).replace(/\s+/g, ' ');
+    throw new Error('Groq returned invalid JSON content: ' + snippet + ' (' + (e.message || 'parse error') + ')');
   }
 }
 
@@ -837,6 +908,16 @@ async function doScan() {
       const inds = buildIndicators(c);
       const tk = await fetchTicker(base, sym, cat);
       if (!tk) continue;
+      // Volatility guard: skip extremes — no edge in dead or chaotic markets
+      const atrP = +inds.atr_pct;
+      if (atrP > 4.0) {
+        aiDecisions[key] = { thinking: false, sym, mkt, action: 'wait', confidence: 0, reasoning: `Skipped — ATR ${atrP.toFixed(2)}% (extreme volatility, unpredictable)`, key_factor: 'volatility guard', risk_level: 'high', market_regime: 'volatile', warnings: ['ATR > 4%'], time: new Date().toLocaleTimeString(), price: tk.last };
+        continue;
+      }
+      if (atrP < 0.05) {
+        aiDecisions[key] = { thinking: false, sym, mkt, action: 'wait', confidence: 0, reasoning: `Skipped — ATR ${atrP.toFixed(2)}% (market dead, no edge)`, key_factor: 'volatility guard', risk_level: 'low', market_regime: 'quiet', warnings: ['ATR < 0.05%'], time: new Date().toLocaleTimeString(), price: tk.last };
+        continue;
+      }
       const hcl = hc.map((x: Candle) => x.c);
       const he21 = emaArr(hcl, 21), he50 = emaArr(hcl, 50);
       const htfDir = he21[he21.length - 1] > he50[he50.length - 1] ? 'UPTREND (EMA21>EMA50)' : 'DOWNTREND (EMA21<EMA50)';
