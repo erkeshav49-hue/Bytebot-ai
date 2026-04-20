@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users } from "../drizzle/schema";
+import { botState, InsertUser, users } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -89,4 +89,29 @@ export async function getUserByOpenId(openId: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
-// TODO: add feature queries here as your schema grows.
+// ─── Bot state persistence ────────────────────────────────────────────────
+
+export async function saveBotState(stateJson: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db
+      .insert(botState)
+      .values({ id: 1, state: stateJson })
+      .onDuplicateKeyUpdate({ set: { state: stateJson } });
+  } catch (error: any) {
+    console.warn("[Database] Failed to save bot state:", error?.message || error);
+  }
+}
+
+export async function loadBotState(): Promise<string | null> {
+  const db = await getDb();
+  if (!db) return null;
+  try {
+    const result = await db.select().from(botState).where(eq(botState.id, 1)).limit(1);
+    return result.length > 0 ? result[0].state : null;
+  } catch (error: any) {
+    console.warn("[Database] Failed to load bot state:", error?.message || error);
+    return null;
+  }
+}

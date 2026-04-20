@@ -352,7 +352,9 @@ ${stratCtx ? 'YOUR CURRENT STRATEGY MEMORY:\n' + stratCtx : 'No strategy notes y
   }
 }
 
-// ─── Bot State (in-memory singleton) ────────────────────────────────────────
+// ─── Bot State (in-memory singleton, persisted to DB) ───────────────────────
+
+import { loadBotState, saveBotState } from './db';
 
 let config: BotConfig = { ...DEFAULT_CONFIG };
 let status: BotStatus = 'offline';
@@ -379,7 +381,64 @@ let tickerTimer: ReturnType<typeof setInterval> | null = null;
 let newsTimer: ReturnType<typeof setInterval> | null = null;
 let countdownTimer: ReturnType<typeof setInterval> | null = null;
 let tgPollTimer: ReturnType<typeof setInterval> | null = null;
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let tgOffset = 0;
+
+// ─── Persistence ────────────────────────────────────────────────────────────
+
+function buildPersistedState() {
+  return {
+    config, status, paused, scanCount,
+    openTrades, tradeLog, aiDecisions, stats,
+    lastScanTime,
+    strategyNotes, tradeLearnings, lastAnalysisTime, totalAnalyses,
+  };
+}
+
+function schedulePersist() {
+  if (persistTimer) return;
+  persistTimer = setTimeout(async () => {
+    persistTimer = null;
+    try {
+      await saveBotState(JSON.stringify(buildPersistedState()));
+    } catch (e) {
+      console.warn('[BotEngine] Persist failed:', e);
+    }
+  }, 2000);
+}
+
+export async function botRestoreFromDb(): Promise<void> {
+  try {
+    const json = await loadBotState();
+    if (!json) {
+      console.log('[BotEngine] No saved state found, starting fresh');
+      return;
+    }
+    const s = JSON.parse(json);
+    if (s.config) config = { ...DEFAULT_CONFIG, ...s.config };
+    if (s.openTrades) openTrades = s.openTrades;
+    if (s.tradeLog) tradeLog = s.tradeLog;
+    if (s.aiDecisions) aiDecisions = s.aiDecisions;
+    if (s.stats) stats = s.stats;
+    if (s.lastScanTime) lastScanTime = s.lastScanTime;
+    if (s.strategyNotes) strategyNotes = s.strategyNotes;
+    if (s.tradeLearnings) tradeLearnings = s.tradeLearnings;
+    if (s.lastAnalysisTime) lastAnalysisTime = s.lastAnalysisTime;
+    if (typeof s.totalAnalyses === 'number') totalAnalyses = s.totalAnalyses;
+    if (typeof s.scanCount === 'number') scanCount = s.scanCount;
+    if (typeof s.paused === 'boolean') paused = s.paused;
+    console.log(`[BotEngine] Restored state from DB (last status: ${s.status}, scans: ${scanCount}, trades: ${stats.trades})`);
+
+    // Auto-resume if bot was running before restart
+    if (s.status && s.status !== 'offline') {
+      console.log('[BotEngine] Auto-resuming bot (was running before restart)');
+      const result = botStart();
+      if (result.error) console.warn('[BotEngine] Auto-resume failed:', result.error);
+    }
+  } catch (e) {
+    console.warn('[BotEngine] Failed to restore state:', e);
+  }
+}
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -413,6 +472,7 @@ function closeTrade(key: string, ep: number, pnl: number, reason: string) {
   if (stats.trades > 0 && stats.trades % 5 === 0) {
     setTimeout(() => analyzeTradePerformance(), 5000);
   }
+  schedulePersist();
 }
 
 async function syncPositions() {
@@ -746,6 +806,7 @@ async function doScan() {
   }
   status = 'running';
   lastScanTime = new Date().toISOString();
+  schedulePersist();
 }
 
 async function refreshTickers() {
@@ -1073,6 +1134,7 @@ export function botSetConfig(newConfig: BotConfig) {
   if (config.tgt && config.tgc && (config.tgt !== oldTgt || config.tgc !== oldTgc)) {
     startTGPoll();
   }
+  schedulePersist();
 }
 
 export function botStart(): { error: string | null } {
@@ -1118,11 +1180,13 @@ export function botStart(): { error: string | null } {
     if (tradeLog.length >= 3) analyzeTradePerformance();
   }, 600000); // 10 minutes
 
+  schedulePersist();
   return { error: null };
 }
 
 export function botStop() {
   status = 'offline';
+  schedulePersist();
   nextScanIn = 0;
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
   if (scanTimer) { clearInterval(scanTimer); scanTimer = null; }

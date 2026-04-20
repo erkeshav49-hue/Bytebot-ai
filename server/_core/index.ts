@@ -105,8 +105,15 @@ async function startServer() {
     console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
   }
 
-  server.listen(port, () => {
+  server.listen(port, async () => {
     console.log(`[api] server listening on port ${port}`);
+    // Restore bot state from DB and auto-resume if it was running
+    try {
+      const { botRestoreFromDb } = await import("../bot-engine");
+      await botRestoreFromDb();
+    } catch (e) {
+      console.warn("[api] Failed to restore bot state:", e);
+    }
   });
 }
 

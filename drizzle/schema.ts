@@ -25,4 +25,14 @@ export const users = mysqlTable("users", {
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 
-// TODO: Add your tables here
+/**
+ * Bot persistent state. Single-row table (id=1) storing serialized bot state JSON.
+ * Allows the bot to survive server restarts and resume trading automatically.
+ */
+export const botState = mysqlTable("bot_state", {
+  id: int("id").primaryKey(),
+  state: text("state").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type BotStateRow = typeof botState.$inferSelect;
