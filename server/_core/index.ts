@@ -76,7 +76,7 @@ async function startServer() {
 
   // In production, serve the static Expo web build
   if (process.env.NODE_ENV === "production") {
-    const publicDir = path.join(__dirname, "../../public");
+    const publicDir = path.join(__dirname, "../../web-build");
     app.use(express.static(publicDir));
     // SPA fallback - serve index.html for all non-API routes
     app.get("*", (_req, res) => {
