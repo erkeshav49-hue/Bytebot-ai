@@ -287,8 +287,17 @@ Respond with ONLY this JSON, no other text:
   });
 
   const data = await callGroq(groqKey, body);
-  const text = data.choices[0].message.content.trim().replace(/```json|```/g, '').trim();
-  return JSON.parse(text) as GroqDecision;
+  const rawContent = data?.choices?.[0]?.message?.content;
+  if (typeof rawContent !== 'string' || !rawContent.trim()) {
+    throw new Error('Groq returned empty response');
+  }
+  const text = rawContent.trim().replace(/```json|```/g, '').trim();
+  try {
+    return JSON.parse(text) as GroqDecision;
+  } catch {
+    const snippet = text.slice(0, 80).replace(/\s+/g, ' ');
+    throw new Error('Groq returned invalid JSON content: ' + snippet);
+  }
 }
 
 // ─── Groq AI: Answer any question (for Telegram /ask command & free chat) ────
