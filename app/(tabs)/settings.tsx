@@ -363,6 +363,21 @@ export default function SettingsScreen() {
               />
             </View>
           </View>
+          <ToggleRow
+            label="🎯 Trailing Stop Loss"
+            subtitle={form.trail ? `ON — SL trails ${form.trailDist || 0.5}% behind peak (TP disabled)` : "OFF — using fixed TP/SL above"}
+            value={!!form.trail}
+            onValueChange={(v) => update("trail", v)}
+          />
+          {form.trail ? (
+            <InputField
+              label="Trailing Distance %"
+              value={String(form.trailDist ?? 0.5)}
+              onChangeText={(t) => update("trailDist", +t || 0)}
+              keyboardType="numeric"
+              hint="SL stays this % below highest price (long) / above lowest (short). Smaller = tighter trail = exit on small dips. Larger = looser = lets profits run."
+            />
+          ) : null}
           <InputField
             label="Futures Leverage"
             value={String(form.lv)}

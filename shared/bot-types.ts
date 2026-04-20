@@ -14,6 +14,8 @@ export interface BotConfig {
   sl: number;    // stop loss %
   lv: number;    // leverage
   mc: number;    // min confidence %
+  trail?: boolean;     // trailing stop loss enabled (overrides fixed TP)
+  trailDist?: number;  // trailing distance in % (e.g. 0.5 = SL trails 0.5% below peak)
   p: Record<string, { s?: boolean; f?: boolean }>;  // pairs by coin: { BTC: {s:true,f:true}, ETH: {...}, ... }
 }
 
@@ -36,6 +38,9 @@ export interface OpenTrade {
   key_factor: string;
   regime: string;
   paper?: boolean;
+  peak?: number;       // highest favorable price seen (for trailing SL)
+  trail?: boolean;     // snapshot: trailing was enabled at entry
+  trailDist?: number;  // snapshot: trailing distance % at entry
 }
 
 export interface TradeLogEntry {
@@ -136,6 +141,8 @@ export const DEFAULT_CONFIG: BotConfig = {
   sl: 0.25,
   lv: 5,
   mc: 65,
+  trail: false,
+  trailDist: 0.5,
   p: {
     BTC: { s: true, f: true },
     ETH: { s: true, f: true },

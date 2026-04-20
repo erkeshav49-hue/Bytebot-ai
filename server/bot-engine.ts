@@ -632,10 +632,29 @@ async function syncPositions() {
         if (!tk) continue;
         const price = tk.last;
         const isLong = t.side === 'long';
-        if (isLong && price >= t.tp) closeTrade(k, t.tp, (t.tp - t.entry) * t.qty, 'Paper TP hit ✅');
-        else if (isLong && price <= t.sl) closeTrade(k, t.sl, (t.sl - t.entry) * t.qty, 'Paper SL hit ❌');
-        else if (!isLong && price <= t.tp) closeTrade(k, t.tp, (t.entry - t.tp) * t.qty, 'Paper TP hit ✅');
-        else if (!isLong && price >= t.sl) closeTrade(k, t.sl, (t.entry - t.sl) * t.qty, 'Paper SL hit ❌');
+
+        // Trailing stop loss logic — update peak + raise/lower SL as price moves favorably
+        if (t.trail) {
+          const dist = +(t.trailDist || 0.5);
+          if (isLong) {
+            if (price > (t.peak || t.entry)) t.peak = price;
+            const newSL = +((t.peak || t.entry) * (1 - dist / 100)).toFixed(4);
+            if (newSL > t.sl) t.sl = newSL;  // only raise, never lower
+          } else {
+            if (price < (t.peak || t.entry)) t.peak = price;
+            const newSL = +((t.peak || t.entry) * (1 + dist / 100)).toFixed(4);
+            if (newSL < t.sl) t.sl = newSL;  // only lower, never raise
+          }
+          // For trailing trades, ONLY exit on SL hit (TP is disabled)
+          if (isLong && price <= t.sl) closeTrade(k, t.sl, (t.sl - t.entry) * t.qty, `Trailing SL hit ✅ (peak: ${t.peak})`);
+          else if (!isLong && price >= t.sl) closeTrade(k, t.sl, (t.entry - t.sl) * t.qty, `Trailing SL hit ✅ (peak: ${t.peak})`);
+        } else {
+          // Fixed TP/SL behavior
+          if (isLong && price >= t.tp) closeTrade(k, t.tp, (t.tp - t.entry) * t.qty, 'Paper TP hit ✅');
+          else if (isLong && price <= t.sl) closeTrade(k, t.sl, (t.sl - t.entry) * t.qty, 'Paper SL hit ❌');
+          else if (!isLong && price <= t.tp) closeTrade(k, t.tp, (t.entry - t.tp) * t.qty, 'Paper TP hit ✅');
+          else if (!isLong && price >= t.sl) closeTrade(k, t.sl, (t.entry - t.sl) * t.qty, 'Paper SL hit ❌');
+        }
       } catch { /* silent */ }
     }
     return;
@@ -668,14 +687,23 @@ async function openPosition(sym: string, mkt: string, cat: string, decision: Gro
   const tp = decision.action === 'long'
     ? +(price * (1 + (config.tp || 0.5) / 100)).toFixed(4)
     : +(price * (1 - (config.tp || 0.5) / 100)).toFixed(4);
+  const trailOn = !!config.trail;
+  // Validate trailDist: must be positive, clamp to reasonable range (0.05% - 20%)
+  let trailDist = +(config.trailDist || 0.5);
+  if (!isFinite(trailDist) || trailDist <= 0) trailDist = 0.5;
+  if (trailDist > 20) trailDist = 20;
+
+  // For trailing trades, initial SL uses trailDist (not fixed config.sl) so behavior matches UI
+  const slPct = trailOn ? trailDist : (config.sl || 0.25);
   const sl = decision.action === 'long'
-    ? +(price * (1 - (config.sl || 0.25) / 100)).toFixed(4)
-    : +(price * (1 + (config.sl || 0.25) / 100)).toFixed(4);
+    ? +(price * (1 - slPct / 100)).toFixed(4)
+    : +(price * (1 + slPct / 100)).toFixed(4);
 
   if (config.paper) {
-    const trade: OpenTrade = { sym, mkt, cat, side: decision.action as 'long' | 'short', entry: price, qty, tp, sl, time: Date.now(), conf: decision.confidence, reasoning: decision.reasoning, key_factor: decision.key_factor, regime: decision.market_regime, paper: true };
+    const trade: OpenTrade = { sym, mkt, cat, side: decision.action as 'long' | 'short', entry: price, qty, tp, sl, time: Date.now(), conf: decision.confidence, reasoning: decision.reasoning, key_factor: decision.key_factor, regime: decision.market_regime, paper: true, peak: price, trail: trailOn, trailDist };
     openTrades[key] = trade;
-    tgSend(config.tgt, config.tgc, `📄 <b>Paper Trade Opened</b>\n\n<b>${sym}</b> [${mkt.toUpperCase()}] ${decision.action.toUpperCase()}\nEntry: ${price} | TP: ${tp} | SL: ${sl}\nSize: ${usdt.toFixed(0)} USDT | Lev: ${lev}×\nConfidence: ${decision.confidence}%\n\n🧠 <b>Groq AI Reasoning:</b>\n${decision.reasoning}\n\n💡 ${decision.key_factor}\n\n<i>This is a simulated paper trade — no real money used.</i>`);
+    const exitInfo = trailOn ? `Trailing SL: ${trailDist}% (TP disabled)` : `TP: ${tp} | SL: ${sl}`;
+    tgSend(config.tgt, config.tgc, `📄 <b>Paper Trade Opened</b>\n\n<b>${sym}</b> [${mkt.toUpperCase()}] ${decision.action.toUpperCase()}\nEntry: ${price} | ${exitInfo}\nSize: ${usdt.toFixed(0)} USDT | Lev: ${lev}×\nConfidence: ${decision.confidence}%\n\n🧠 <b>Groq AI Reasoning:</b>\n${decision.reasoning}\n\n💡 ${decision.key_factor}\n\n<i>This is a simulated paper trade — no real money used.</i>`);
     return;
   }
 
