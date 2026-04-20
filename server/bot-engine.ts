@@ -187,6 +187,44 @@ async function tgTest(token: string, chatId: string): Promise<boolean> {
 
 // ─── Groq AI (server-side, no CORS) ─────────────────────────────────────────
 
+async function callGroq(groqKey: string, body: string): Promise<any> {
+  if (!groqKey || !groqKey.trim()) {
+    throw new Error('Groq API key missing — add it in Settings');
+  }
+  let r: Response;
+  try {
+    r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + groqKey.trim() },
+      body,
+    });
+  } catch (e: any) {
+    throw new Error('Network error reaching Groq: ' + (e.message || 'unknown'));
+  }
+  const raw = await r.text();
+  const ct = r.headers.get('content-type') || '';
+  if (!r.ok) {
+    if (r.status === 401) throw new Error('Groq API key invalid (401). Generate a new key at console.groq.com/keys and update Settings.');
+    if (r.status === 403) throw new Error('Groq API forbidden (403). Check key permissions or region.');
+    if (r.status === 429) throw new Error('Groq rate limit hit (429). Bot will retry next scan.');
+    if (r.status >= 500) throw new Error('Groq server error (' + r.status + '). Will retry next scan.');
+    const snippet = raw.slice(0, 120).replace(/\s+/g, ' ');
+    throw new Error('Groq HTTP ' + r.status + ': ' + snippet);
+  }
+  if (!ct.includes('application/json')) {
+    throw new Error('Groq returned non-JSON response — likely key invalid or service blocked. Try regenerating key at console.groq.com/keys');
+  }
+  let data: any;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error('Groq returned malformed JSON');
+  }
+  if (data.error) throw new Error('Groq: ' + (data.error.message || 'unknown error'));
+  return data;
+}
+
+
 interface GroqDecision {
   action: 'long' | 'short' | 'wait';
   confidence: number;
@@ -248,13 +286,7 @@ Respond with ONLY this JSON, no other text:
     ],
   });
 
-  const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + groqKey },
-    body,
-  });
-  const data = await r.json();
-  if (data.error) throw new Error(data.error.message || 'Groq API error');
+  const data = await callGroq(groqKey, body);
   const text = data.choices[0].message.content.trim().replace(/```json|```/g, '').trim();
   return JSON.parse(text) as GroqDecision;
 }
@@ -339,16 +371,10 @@ ${stratCtx ? 'YOUR CURRENT STRATEGY MEMORY:\n' + stratCtx : 'No strategy notes y
         { role: 'user', content: question },
       ],
     });
-    const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + groqKey },
-      body,
-    });
-    const data = await r.json();
-    if (data.error) return 'Groq error: ' + (data.error.message || 'unknown');
+    const data = await callGroq(groqKey, body);
     return data.choices[0].message.content.trim();
   } catch (e: any) {
-    return 'Error: ' + (e.message || 'unknown');
+    return '⚠️ ' + (e.message || 'unknown error');
   }
 }
 
@@ -622,13 +648,7 @@ Respond with ONLY valid JSON. Be specific with symbols, timeframes, and market c
         { role: 'user', content: prompt },
       ],
     });
-    const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + config.groq },
-      body,
-    });
-    const data = await r.json();
-    if (data.error) return;
+    const data = await callGroq(config.groq, body);
     const text = data.choices[0].message.content.trim().replace(/```json|```/g, '').trim();
     const result = JSON.parse(text);
 
@@ -714,13 +734,7 @@ Rules:
         { role: 'user', content: prompt },
       ],
     });
-    const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + groqKey },
-      body,
-    });
-    const data = await r.json();
-    if (data.error) return 'Groq error: ' + (data.error.message || 'unknown');
+    const data = await callGroq(groqKey, body);
     const text = data.choices[0].message.content.trim().replace(/```json|```/g, '').trim();
     const result = JSON.parse(text);
 
