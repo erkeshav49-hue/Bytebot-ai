@@ -50,6 +50,6 @@ localPort = 5001
 externalPort = 3001
 
 [deployment]
-deploymentTarget = "autoscale"
+deploymentTarget = "vm"
 run = ["node", "dist/index.js"]
 build = ["pnpm", "build"]

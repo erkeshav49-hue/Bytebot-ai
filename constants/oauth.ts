@@ -35,18 +35,21 @@ export function getApiBaseUrl(): string {
     return API_BASE_URL.replace(/\/$/, "");
   }
 
-  // On web, derive from current hostname by replacing port 5000 with 3000
+  // On web, derive from current hostname
   if (ReactNative.Platform.OS === "web" && typeof window !== "undefined" && window.location) {
-    const { protocol, hostname } = window.location;
-    // Pattern: 5000-sandboxid.region.domain -> 3000-sandboxid.region.domain
+    const { protocol, hostname, port } = window.location;
+    // In development: Metro runs on 5000, API server runs on 3000
+    // Replace port 5000 with 3000 to reach the API server
     const apiHostname = hostname.replace(/^5000-/, "3000-").replace(/^8081-/, "3000-");
     if (apiHostname !== hostname) {
       return `${protocol}//${apiHostname}`;
     }
+    // In production: API and frontend are on the same server (same origin)
+    return `${protocol}//${hostname}${port ? `:${port}` : ""}`;
   }
 
-  // Fallback to Render server URL for production
-  return "https://bytebot-ai.onrender.com";
+  // Fallback
+  return "";
 }
 
 export const SESSION_TOKEN_KEY = "app_session_token";

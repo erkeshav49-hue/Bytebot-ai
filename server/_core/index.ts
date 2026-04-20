@@ -2,11 +2,15 @@ import "dotenv/config";
 import express from "express";
 import { createServer } from "http";
 import net from "net";
+import path from "path";
+import { fileURLToPath } from "url";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -70,7 +74,17 @@ async function startServer() {
     }),
   );
 
-  const preferredPort = parseInt(process.env.PORT || "3000");
+  // In production, serve the static Expo web build
+  if (process.env.NODE_ENV === "production") {
+    const publicDir = path.join(__dirname, "../../public");
+    app.use(express.static(publicDir));
+    // SPA fallback - serve index.html for all non-API routes
+    app.get("*", (_req, res) => {
+      res.sendFile(path.join(publicDir, "index.html"));
+    });
+  }
+
+  const preferredPort = parseInt(process.env.PORT || "5000");
   const port = await findAvailablePort(preferredPort);
 
   if (port !== preferredPort) {
