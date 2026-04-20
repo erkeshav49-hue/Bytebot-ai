@@ -5,6 +5,7 @@ import net from "net";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
+import { createProxyMiddleware } from "http-proxy-middleware";
 import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
@@ -74,14 +75,27 @@ async function startServer() {
     }),
   );
 
-  // In production, serve the static Expo web build
   if (process.env.NODE_ENV === "production") {
+    // Production: serve the static Expo web build
     const publicDir = path.join(__dirname, "../../web-build");
     app.use(express.static(publicDir));
     // SPA fallback - serve index.html for all non-API routes
     app.get("*", (_req, res) => {
       res.sendFile(path.join(publicDir, "index.html"));
     });
+  } else {
+    // Development: proxy all non-API requests to Metro dev server
+    const metroPort = process.env.METRO_PORT || "8081";
+    const metroTarget = `http://localhost:${metroPort}`;
+    app.use(
+      createProxyMiddleware({
+        target: metroTarget,
+        changeOrigin: true,
+        ws: true,
+        // Don't proxy API routes - they're handled above
+        pathFilter: (pathname) => !pathname.startsWith("/api/") && !pathname.startsWith("/storage/"),
+      }),
+    );
   }
 
   const preferredPort = parseInt(process.env.PORT || "5000");

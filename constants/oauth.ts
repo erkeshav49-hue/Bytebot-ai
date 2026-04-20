@@ -35,16 +35,11 @@ export function getApiBaseUrl(): string {
     return API_BASE_URL.replace(/\/$/, "");
   }
 
-  // On web, derive from current hostname
+  // On web, API is always on the same origin as the frontend
+  // (Express server proxies non-API requests to Metro in dev,
+  //  and serves the static web build in production)
   if (ReactNative.Platform.OS === "web" && typeof window !== "undefined" && window.location) {
     const { protocol, hostname, port } = window.location;
-    // In development: Metro runs on 5000, API server runs on 3000
-    // Replace port 5000 with 3000 to reach the API server
-    const apiHostname = hostname.replace(/^5000-/, "3000-").replace(/^8081-/, "3000-");
-    if (apiHostname !== hostname) {
-      return `${protocol}//${apiHostname}`;
-    }
-    // In production: API and frontend are on the same server (same origin)
     return `${protocol}//${hostname}${port ? `:${port}` : ""}`;
   }
 
