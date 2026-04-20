@@ -1,5 +1,5 @@
 // ─── Server-Side Bot Engine ──────────────────────────────────────────────────
-// Runs the 45-second scan loop in the Node.js server process (24/7).
+// Runs the 10-second scan loop in the Node.js server process (24/7).
 // All state is kept in memory; the mobile app polls via tRPC.
 // Includes Telegram command handler so Groq AI responds to user messages.
 
@@ -314,7 +314,7 @@ async function askGroqQuestion(groqKey: string, question: string): Promise<strin
     const systemPrompt = `You are ByteBot AI — an autonomous crypto trading bot that is ACTIVELY running on the user's server 24/7. You are NOT a generic assistant. You ARE the bot.
 
 IMPORTANT IDENTITY RULES:
-- You scan crypto markets every 45 seconds using technical indicators (EMA, RSI, MACD, ADX, Bollinger Bands) and Groq AI analysis.
+- You scan crypto markets every 10 seconds using technical indicators (EMA, RSI, MACD, ADX, Bollinger Bands) and Groq AI analysis.
 - You open and close trades automatically based on your analysis. You set TP/SL targets and monitor them.
 - You read crypto news and factor it into every trading decision.
 - You LEARN from past trades and adapt your strategy over time.
@@ -1090,14 +1090,14 @@ export function botStart(): { error: string | null } {
   refreshTickers();
   fetchNews();
 
-  // 45-second scan cycle
-  nextScanIn = 45;
+  // 10-second scan cycle
+  nextScanIn = 10;
   countdownTimer = setInterval(() => {
     if (status === 'offline') return;
     nextScanIn--;
     if (nextScanIn <= 0) {
       doScan();
-      nextScanIn = 45;
+      nextScanIn = 10;
     }
   }, 1000);
 
