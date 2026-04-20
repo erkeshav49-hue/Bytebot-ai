@@ -13,6 +13,7 @@ import {
   botClearLog,
   botResetAll,
   botTestTelegram,
+  botApplyStrategy,
 } from "./bot-engine";
 
 const botConfigSchema = z.object({
@@ -29,12 +30,7 @@ const botConfigSchema = z.object({
   sl: z.number(),
   lv: z.number(),
   mc: z.number(),
-  p: z.object({
-    bs: z.boolean(),
-    es: z.boolean(),
-    bf: z.boolean(),
-    ef: z.boolean(),
-  }),
+  p: z.record(z.string(), z.object({ s: z.boolean().optional(), f: z.boolean().optional() })),
 });
 
 export const appRouter = router({
@@ -98,6 +94,13 @@ export const appRouter = router({
       botResetAll();
       return { success: true };
     }),
+
+    // Apply natural-language strategy instruction (changes settings + adds notes via AI)
+    applyStrategy: publicProcedure
+      .input(z.object({ instruction: z.string().min(1) }))
+      .mutation(async ({ input }) => {
+        return await botApplyStrategy(input.instruction);
+      }),
 
     // Test Telegram connection
     testTelegram: publicProcedure

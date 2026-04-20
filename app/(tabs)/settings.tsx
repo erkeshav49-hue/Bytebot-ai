@@ -4,7 +4,7 @@ import * as Haptics from "expo-haptics";
 import { ScreenContainer } from "@/components/screen-container";
 import { trpc } from "@/lib/trpc";
 import type { BotConfig } from "@/shared/bot-types";
-import { DEFAULT_CONFIG } from "@/shared/bot-types";
+import { DEFAULT_CONFIG, SUPPORTED_COINS } from "@/shared/bot-types";
 
 const PRESETS: Record<string, { sz: number; lv: number; tp: number; sl: number }> = {
   low: { sz: 10, lv: 3, tp: 0.3, sl: 0.15 },
@@ -80,9 +80,33 @@ export default function SettingsScreen() {
     setForm(prev => ({ ...prev, [key]: value }));
   }, []);
 
-  const updatePair = useCallback((key: keyof BotConfig["p"], value: boolean) => {
-    setForm(prev => ({ ...prev, p: { ...prev.p, [key]: value } }));
+  const updatePairToggle = useCallback((coin: string, kind: "s" | "f", value: boolean) => {
+    setForm(prev => {
+      const cur = prev.p?.[coin] || { s: false, f: false };
+      return { ...prev, p: { ...prev.p, [coin]: { ...cur, [kind]: value } } };
+    });
   }, []);
+
+  const [strategyText, setStrategyText] = useState("");
+  const [strategyResp, setStrategyResp] = useState<string | null>(null);
+  const applyStrategyMutation = trpc.bot.applyStrategy.useMutation();
+  const utils = trpc.useUtils();
+
+  const handleApplyStrategy = useCallback(async () => {
+    if (!strategyText.trim()) return;
+    if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setStrategyResp("⏳ AI is processing...");
+    try {
+      const res = await applyStrategyMutation.mutateAsync({ instruction: strategyText.trim() });
+      setStrategyResp(res.response);
+      setStrategyText("");
+      // Refresh server config so UI reflects any setting changes
+      const fresh = await utils.bot.getConfig.fetch();
+      if (fresh) setForm({ ...fresh });
+    } catch (e: any) {
+      setStrategyResp("❌ Error: " + (e?.message || "unknown"));
+    }
+  }, [strategyText, applyStrategyMutation, utils]);
 
   const handleSave = useCallback(async () => {
     if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -225,13 +249,68 @@ export default function SettingsScreen() {
           </Pressable>
         </View>
 
-        {/* Trading Pairs */}
+        {/* AI Strategy Input — natural language → settings + notes */}
+        <View style={styles.card}>
+          <SectionTitle title="AI STRATEGY (NATURAL LANGUAGE)" />
+          <Text style={styles.fieldHint}>
+            Type any instruction. AI will update settings and add strategy notes automatically.
+            {"\n"}Examples: "Add SOL and XRP", "Set min confidence to 60%", "Avoid shorting in ranging markets", "Set TP 2% and SL 1%".
+          </Text>
+          <TextInput
+            style={[styles.fieldInput, { minHeight: 70, textAlignVertical: "top", marginTop: 8 }]}
+            value={strategyText}
+            onChangeText={setStrategyText}
+            placeholder="e.g. Add SOL spot+futures, set min confidence 60, TP 2%"
+            placeholderTextColor="#3d5470"
+            multiline
+          />
+          <Pressable
+            onPress={handleApplyStrategy}
+            disabled={applyStrategyMutation.isPending || !strategyText.trim()}
+            style={({ pressed }) => [styles.testBtn, { marginTop: 10, opacity: !strategyText.trim() ? 0.4 : pressed ? 0.7 : 1 }]}
+          >
+            <Text style={styles.testBtnText}>{applyStrategyMutation.isPending ? "PROCESSING..." : "APPLY STRATEGY"}</Text>
+          </Pressable>
+          {strategyResp ? (
+            <View style={{ marginTop: 12, padding: 10, backgroundColor: "#0a1628", borderRadius: 8, borderLeftWidth: 3, borderLeftColor: "#00f5a0" }}>
+              <Text style={{ color: "#daeaf8", fontSize: 12, lineHeight: 17 }}>{strategyResp}</Text>
+            </View>
+          ) : null}
+        </View>
+
+        {/* Trading Pairs — all major coins */}
         <View style={styles.card}>
           <SectionTitle title="TRADING PAIRS" />
-          <ToggleRow label="BTC/USDT Spot" value={form.p.bs} onValueChange={(v) => updatePair("bs", v)} />
-          <ToggleRow label="ETH/USDT Spot" value={form.p.es} onValueChange={(v) => updatePair("es", v)} />
-          <ToggleRow label="BTC/USDT Futures" value={form.p.bf} onValueChange={(v) => updatePair("bf", v)} />
-          <ToggleRow label="ETH/USDT Futures" value={form.p.ef} onValueChange={(v) => updatePair("ef", v)} />
+          <Text style={styles.fieldHint}>Toggle Spot (S) and/or Futures (F) for each coin you want the bot to trade.</Text>
+          <View style={{ flexDirection: "row", paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: "#1a2d48" }}>
+            <Text style={[styles.toggleLabel, { flex: 1 }]}>Coin</Text>
+            <Text style={[styles.toggleSub, { width: 70, textAlign: "center", color: "#7c93b3" }]}>SPOT</Text>
+            <Text style={[styles.toggleSub, { width: 70, textAlign: "center", color: "#7c93b3" }]}>FUTURES</Text>
+          </View>
+          {SUPPORTED_COINS.map((coin) => {
+            const t = form.p?.[coin] || { s: false, f: false };
+            return (
+              <View key={coin} style={{ flexDirection: "row", alignItems: "center", paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: "#1a2d48" }}>
+                <Text style={[styles.toggleLabel, { flex: 1 }]}>{coin}/USDT</Text>
+                <View style={{ width: 70, alignItems: "center" }}>
+                  <Switch
+                    value={!!t.s}
+                    onValueChange={(v) => { if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); updatePairToggle(coin, "s", v); }}
+                    trackColor={{ false: "#121a2e", true: "rgba(0,245,160,0.18)" }}
+                    thumbColor={t.s ? "#00f5a0" : "#3d5470"}
+                  />
+                </View>
+                <View style={{ width: 70, alignItems: "center" }}>
+                  <Switch
+                    value={!!t.f}
+                    onValueChange={(v) => { if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); updatePairToggle(coin, "f", v); }}
+                    trackColor={{ false: "#121a2e", true: "rgba(0,245,160,0.18)" }}
+                    thumbColor={t.f ? "#00f5a0" : "#3d5470"}
+                  />
+                </View>
+              </View>
+            );
+          })}
         </View>
 
         {/* Risk Parameters */}

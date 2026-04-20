@@ -574,13 +574,28 @@ export async function botRestoreFromDb(): Promise<void> {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
+// Migrate legacy pair config { bs, es, bf, ef } → new shape { BTC: {s,f}, ETH: {s,f}, ... }
+function migratePairs(p: any): Record<string, { s?: boolean; f?: boolean }> {
+  if (!p || typeof p !== 'object') return { BTC: { s: true, f: true }, ETH: { s: true, f: true } };
+  // Already in new shape if any value is an object
+  const firstVal = Object.values(p)[0];
+  if (firstVal && typeof firstVal === 'object') return p as Record<string, { s?: boolean; f?: boolean }>;
+  // Legacy: bs/es/bf/ef → new
+  return {
+    BTC: { s: p.bs !== false, f: p.bf !== false },
+    ETH: { s: p.es !== false, f: p.ef !== false },
+  };
+}
+
 function getPairs(cfg: BotConfig) {
-  const p = cfg.p || {} as BotConfig['p'];
+  const p = migratePairs(cfg.p);
   const r: { sym: string; mkt: string; cat: string }[] = [];
-  if (p.bs !== false) r.push({ sym: 'BTCUSDT', mkt: 'spot', cat: 'spot' });
-  if (p.es !== false) r.push({ sym: 'ETHUSDT', mkt: 'spot', cat: 'spot' });
-  if (p.bf !== false) r.push({ sym: 'BTCUSDT', mkt: 'futures', cat: 'linear' });
-  if (p.ef !== false) r.push({ sym: 'ETHUSDT', mkt: 'futures', cat: 'linear' });
+  for (const [coin, toggles] of Object.entries(p)) {
+    if (!toggles) continue;
+    const sym = coin.toUpperCase() + 'USDT';
+    if (toggles.s) r.push({ sym, mkt: 'spot', cat: 'spot' });
+    if (toggles.f) r.push({ sym, mkt: 'futures', cat: 'linear' });
+  }
   return r;
 }
 
@@ -804,12 +819,16 @@ Respond with ONLY valid JSON. Be specific with symbols, timeframes, and market c
 
 async function processStrategyCommand(groqKey: string, userMessage: string): Promise<string> {
   const currentNotes = strategyNotes.map(n => `[${n.type}] ${n.text}`).join('\n');
+  const currentPairs = Object.entries(migratePairs(config.p)).map(([c, t]) => `${c}(spot=${t.s ? 'on' : 'off'}, futures=${t.f ? 'on' : 'off'})`).join(', ');
   const prompt = `You are ByteBot AI's strategy manager. The user wants to change the trading strategy.
 
 CURRENT STRATEGY NOTES:
 ${currentNotes || 'No notes yet.'}
 
-CURRENT SETTINGS: Size ${config.sz} USDT | Leverage ${config.lv}× | TP ${config.tp}% | SL ${config.sl}% | Min Confidence ${config.mc}%
+CURRENT SETTINGS: Size ${config.sz} USDT | Leverage ${config.lv}× | TP ${config.tp}% | SL ${config.sl}% | Min Confidence ${config.mc}% | Max Open Trades ${config.mx}
+ACTIVE PAIRS: ${currentPairs}
+
+SUPPORTED COINS: BTC, ETH, SOL, BNB, XRP, DOGE, ADA, AVAX, LINK, MATIC
 
 USER REQUEST: "${userMessage}"
 
@@ -818,16 +837,17 @@ Analyze the request and return JSON:
   "understood": true/false,
   "summary": "brief summary of what you understood",
   "new_notes": ["strategy note 1", "strategy note 2"],
-  "remove_note_ids": [],
-  "param_changes": { "sz": null, "lv": null, "tp": null, "sl": null, "mc": null },
-  "response": "conversational response to the user confirming the changes"
+  "param_changes": { "sz": null, "lv": null, "tp": null, "sl": null, "mc": null, "mx": null },
+  "pair_changes": [ {"coin":"SOL","spot":true,"futures":false}, {"coin":"BTC","spot":false,"futures":false} ],
+  "response": "conversational response confirming the changes (mention exact numeric values changed)"
 }
 
 Rules:
-- new_notes: short, actionable strategy instructions (e.g. "Avoid shorting ETH in ranging markets", "Only trade BTC during high volume")
-- param_changes: set numeric values if user wants to change them, null if not mentioned
-- Be helpful and confirm what you're changing
-- If the request is unclear, set understood to false and ask for clarification in response`;
+- new_notes: short, actionable strategy instructions (e.g. "Avoid shorting ETH in ranging markets")
+- param_changes: numeric values if user wants to change them; null if not mentioned. mc=min confidence %, mx=max open trades, sz=USDT per trade, lv=leverage, tp=take profit %, sl=stop loss %
+- pair_changes: array of coins to enable/disable. Use spot/futures booleans. Only include coins user mentioned. To disable a coin entirely use spot:false, futures:false.
+- If user says "add SOL" → pair_changes: [{"coin":"SOL","spot":true,"futures":true}]. If "remove DOGE" → [{"coin":"DOGE","spot":false,"futures":false}].
+- If unclear, set understood:false and ask in response.`;
 
   try {
     const body = JSON.stringify({
@@ -856,19 +876,51 @@ Rules:
     }
 
     // Apply parameter changes
+    const changedParams: string[] = [];
     if (result.param_changes) {
       const pc = result.param_changes;
-      if (pc.sz != null && +pc.sz >= 5) config.sz = +pc.sz;
-      if (pc.lv != null && +pc.lv >= 1 && +pc.lv <= 50) config.lv = +pc.lv;
-      if (pc.tp != null && +pc.tp > 0) config.tp = +pc.tp;
-      if (pc.sl != null && +pc.sl > 0) config.sl = +pc.sl;
-      if (pc.mc != null && +pc.mc >= 1 && +pc.mc <= 100) config.mc = +pc.mc;
+      if (pc.sz != null && +pc.sz >= 5) { config.sz = +pc.sz; changedParams.push(`size=${config.sz} USDT`); }
+      if (pc.lv != null && +pc.lv >= 1 && +pc.lv <= 50) { config.lv = +pc.lv; changedParams.push(`leverage=${config.lv}×`); }
+      if (pc.tp != null && +pc.tp > 0) { config.tp = +pc.tp; changedParams.push(`TP=${config.tp}%`); }
+      if (pc.sl != null && +pc.sl > 0) { config.sl = +pc.sl; changedParams.push(`SL=${config.sl}%`); }
+      if (pc.mc != null && +pc.mc >= 1 && +pc.mc <= 100) { config.mc = +pc.mc; changedParams.push(`min confidence=${config.mc}%`); }
+      if (pc.mx != null && +pc.mx >= 1 && +pc.mx <= 10) { config.mx = +pc.mx; changedParams.push(`max trades=${config.mx}`); }
     }
 
-    return result.response || 'Strategy updated!';
+    // Apply pair changes
+    const changedPairs: string[] = [];
+    if (Array.isArray(result.pair_changes) && result.pair_changes.length) {
+      const pairs = migratePairs(config.p);
+      const SUPPORTED = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'ADA', 'AVAX', 'LINK', 'MATIC'];
+      for (const pc of result.pair_changes) {
+        const coin = String(pc.coin || '').toUpperCase();
+        if (!SUPPORTED.includes(coin)) continue;
+        pairs[coin] = { s: !!pc.spot, f: !!pc.futures };
+        const status = !pc.spot && !pc.futures ? 'disabled' : `spot=${pc.spot ? 'on' : 'off'}, futures=${pc.futures ? 'on' : 'off'}`;
+        changedPairs.push(`${coin} (${status})`);
+      }
+      config.p = pairs;
+    }
+
+    schedulePersist();
+
+    let suffix = '';
+    if (changedParams.length) suffix += '\n\n⚙️ Settings: ' + changedParams.join(', ');
+    if (changedPairs.length) suffix += '\n📊 Pairs: ' + changedPairs.join(', ');
+    if (Array.isArray(result.new_notes) && result.new_notes.length) suffix += '\n📝 Added ' + result.new_notes.length + ' note(s)';
+
+    return (result.response || 'Strategy updated!') + suffix;
   } catch (e: any) {
     return 'Error processing strategy: ' + (e.message || 'unknown');
   }
+}
+
+// Public API: called from app via tRPC
+export async function botApplyStrategy(instruction: string): Promise<{ response: string }> {
+  if (!config.groq) return { response: '⚠️ Groq API key not set. Add it in Settings first.' };
+  if (!instruction || !instruction.trim()) return { response: 'Please enter an instruction.' };
+  const response = await processStrategyCommand(config.groq, instruction.trim());
+  return { response };
 }
 
 // Exported for tRPC
@@ -1257,7 +1309,7 @@ export function botGetConfig(): BotConfig {
 export function botSetConfig(newConfig: BotConfig) {
   const oldTgt = config.tgt;
   const oldTgc = config.tgc;
-  config = { ...newConfig };
+  config = { ...newConfig, p: migratePairs(newConfig.p) };
   console.log('[BotEngine] Config updated');
 
   // If Telegram credentials changed, restart polling

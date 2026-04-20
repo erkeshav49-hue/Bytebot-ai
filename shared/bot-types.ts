@@ -14,13 +14,12 @@ export interface BotConfig {
   sl: number;    // stop loss %
   lv: number;    // leverage
   mc: number;    // min confidence %
-  p: {           // pairs
-    bs: boolean; // BTC spot
-    es: boolean; // ETH spot
-    bf: boolean; // BTC futures
-    ef: boolean; // ETH futures
-  };
+  p: Record<string, { s?: boolean; f?: boolean }>;  // pairs by coin: { BTC: {s:true,f:true}, ETH: {...}, ... }
 }
+
+// Major coins available for trading (USDT pairs)
+export const SUPPORTED_COINS = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'ADA', 'AVAX', 'LINK', 'MATIC'] as const;
+export type SupportedCoin = typeof SUPPORTED_COINS[number];
 
 export interface OpenTrade {
   sym: string;
@@ -137,5 +136,16 @@ export const DEFAULT_CONFIG: BotConfig = {
   sl: 0.25,
   lv: 5,
   mc: 65,
-  p: { bs: true, es: true, bf: true, ef: true },
+  p: {
+    BTC: { s: true, f: true },
+    ETH: { s: true, f: true },
+    SOL: { s: false, f: false },
+    BNB: { s: false, f: false },
+    XRP: { s: false, f: false },
+    DOGE: { s: false, f: false },
+    ADA: { s: false, f: false },
+    AVAX: { s: false, f: false },
+    LINK: { s: false, f: false },
+    MATIC: { s: false, f: false },
+  },
 };
