@@ -32,6 +32,8 @@ const botConfigSchema = z.object({
   mc: z.number(),
   trail: z.boolean().optional(),
   trailDist: z.number().positive().min(0.05).max(20).optional(),
+  deepseek: z.string().optional(),
+  aiProvider: z.enum(['groq', 'deepseek']).optional(),
   p: z.record(z.string(), z.object({ s: z.boolean().optional(), f: z.boolean().optional() })),
 });
 

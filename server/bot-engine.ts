@@ -213,40 +213,69 @@ async function tgTest(token: string, chatId: string): Promise<boolean> {
 
 // ─── Groq AI (server-side, no CORS) ─────────────────────────────────────────
 
-async function callGroq(groqKey: string, body: string): Promise<any> {
-  if (!groqKey || !groqKey.trim()) {
-    throw new Error('Groq API key missing — add it in Settings');
+// Returns provider config (URL, model, key, name) based on current config.aiProvider
+function getAIProvider(): { name: string; url: string; model: string; key: string; keyHint: string } {
+  const provider = config.aiProvider || 'groq';
+  if (provider === 'deepseek') {
+    return {
+      name: 'DeepSeek',
+      url: 'https://api.deepseek.com/v1/chat/completions',
+      model: 'deepseek-chat',
+      key: (config.deepseek || '').trim(),
+      keyHint: 'platform.deepseek.com/api_keys',
+    };
   }
+  return {
+    name: 'Groq',
+    url: 'https://api.groq.com/openai/v1/chat/completions',
+    model: 'llama-3.3-70b-versatile',
+    key: (config.groq || '').trim(),
+    keyHint: 'console.groq.com/keys',
+  };
+}
+
+async function callAI(_unusedKey: string, body: string): Promise<any> {
+  const p = getAIProvider();
+  if (!p.key) {
+    throw new Error(`${p.name} API key missing — add it in Settings`);
+  }
+  // Inject correct model into body (replaces hardcoded model)
+  let parsed: any;
+  try { parsed = JSON.parse(body); } catch { parsed = {}; }
+  parsed.model = p.model;
+  const finalBody = JSON.stringify(parsed);
+
   let r: Response;
   try {
-    r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    r = await fetch(p.url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + groqKey.trim() },
-      body,
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + p.key },
+      body: finalBody,
     });
   } catch (e: any) {
-    throw new Error('Network error reaching Groq: ' + (e.message || 'unknown'));
+    throw new Error(`Network error reaching ${p.name}: ` + (e.message || 'unknown'));
   }
   const raw = await r.text();
   const ct = r.headers.get('content-type') || '';
   if (!r.ok) {
-    if (r.status === 401) throw new Error('Groq API key invalid (401). Generate a new key at console.groq.com/keys and update Settings.');
-    if (r.status === 403) throw new Error('Groq API forbidden (403). Check key permissions or region.');
-    if (r.status === 429) throw new Error('Groq rate limit hit (429). Bot will retry next scan.');
-    if (r.status >= 500) throw new Error('Groq server error (' + r.status + '). Will retry next scan.');
+    if (r.status === 401) throw new Error(`${p.name} API key invalid (401). Generate a new key at ${p.keyHint} and update Settings.`);
+    if (r.status === 402) throw new Error(`${p.name} insufficient balance (402). Top up at ${p.keyHint}.`);
+    if (r.status === 403) throw new Error(`${p.name} API forbidden (403). Check key permissions or region.`);
+    if (r.status === 429) throw new Error(`${p.name} rate limit hit (429). Bot will retry next scan.`);
+    if (r.status >= 500) throw new Error(`${p.name} server error (${r.status}). Will retry next scan.`);
     const snippet = raw.slice(0, 120).replace(/\s+/g, ' ');
-    throw new Error('Groq HTTP ' + r.status + ': ' + snippet);
+    throw new Error(`${p.name} HTTP ${r.status}: ` + snippet);
   }
   if (!ct.includes('application/json')) {
-    throw new Error('Groq returned non-JSON response — likely key invalid or service blocked. Try regenerating key at console.groq.com/keys');
+    throw new Error(`${p.name} returned non-JSON response — likely key invalid or service blocked. Try regenerating key at ${p.keyHint}`);
   }
   let data: any;
   try {
     data = JSON.parse(raw);
   } catch {
-    throw new Error('Groq returned malformed JSON');
+    throw new Error(`${p.name} returned malformed JSON`);
   }
-  if (data.error) throw new Error('Groq: ' + (data.error.message || 'unknown error'));
+  if (data.error) throw new Error(`${p.name}: ` + (data.error.message || 'unknown error'));
   return data;
 }
 
@@ -374,7 +403,7 @@ Respond with ONLY this JSON object — no markdown, no backticks, no explanation
 {"action":"long|short|wait","confidence":0-100,"reasoning":"2-3 sentences explaining decision including how news + HTF affected it","key_factor":"single most decisive reason","risk_level":"low|medium|high","market_regime":"trending_up|trending_down|ranging|volatile|quiet","warnings":["any risk or concern"]}`;
 
   const body = JSON.stringify({
-    model: 'llama-3.3-70b-versatile',
+    // model injected by callAI based on aiProvider
     max_tokens: 400,
     temperature: 0.1,
     response_format: { type: 'json_object' },
@@ -384,7 +413,7 @@ Respond with ONLY this JSON object — no markdown, no backticks, no explanation
     ],
   });
 
-  const data = await callGroq(groqKey, body);
+  const data = await callAI(groqKey, body);
   const rawContent = data?.choices?.[0]?.message?.content;
   if (typeof rawContent !== 'string' || !rawContent.trim()) {
     throw new Error('Groq returned empty response');
@@ -469,7 +498,7 @@ ${botContext}
 ${stratCtx ? 'YOUR CURRENT STRATEGY MEMORY:\n' + stratCtx : 'No strategy notes yet. The user can tell you to change strategy and you will remember.'}`;
 
     const body = JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
+      // model injected by callAI
       max_tokens: 500,
       temperature: 0.3,
       messages: [
@@ -477,7 +506,7 @@ ${stratCtx ? 'YOUR CURRENT STRATEGY MEMORY:\n' + stratCtx : 'No strategy notes y
         { role: 'user', content: question },
       ],
     });
-    const data = await callGroq(groqKey, body);
+    const data = await callAI(groqKey, body);
     return data.choices[0].message.content.trim();
   } catch (e: any) {
     return '⚠️ ' + (e.message || 'unknown error');
@@ -761,7 +790,7 @@ function addNote(type: 'user' | 'learning', text: string, source: string): Strat
 }
 
 async function analyzeTradePerformance() {
-  if (tradeLog.length < 3 || !config.groq) return; // need at least 3 trades
+  if (tradeLog.length < 3 || !getAIProvider().key) return; // need at least 3 trades + AI key
   totalAnalyses++;
   lastAnalysisTime = new Date().toISOString();
 
@@ -788,7 +817,7 @@ Respond with ONLY valid JSON. Be specific with symbols, timeframes, and market c
 
   try {
     const body = JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
+      // model injected by callAI
       max_tokens: 600,
       temperature: 0.2,
       response_format: { type: 'json_object' },
@@ -797,7 +826,7 @@ Respond with ONLY valid JSON. Be specific with symbols, timeframes, and market c
         { role: 'user', content: prompt },
       ],
     });
-    const data = await callGroq(config.groq, body);
+    const data = await callAI(config.groq, body);
     const text = data.choices[0].message.content.trim().replace(/```json|```/g, '').trim();
     const result = JSON.parse(text);
 
@@ -879,7 +908,7 @@ Rules:
 
   try {
     const body = JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
+      // model injected by callAI
       max_tokens: 500,
       temperature: 0.2,
       response_format: { type: 'json_object' },
@@ -888,7 +917,7 @@ Rules:
         { role: 'user', content: prompt },
       ],
     });
-    const data = await callGroq(groqKey, body);
+    const data = await callAI(groqKey, body);
     const text = data.choices[0].message.content.trim().replace(/```json|```/g, '').trim();
     const result = JSON.parse(text);
 
@@ -945,7 +974,7 @@ Rules:
 
 // Public API: called from app via tRPC
 export async function botApplyStrategy(instruction: string): Promise<{ response: string }> {
-  if (!config.groq) return { response: '⚠️ Groq API key not set. Add it in Settings first.' };
+  const _aiCheck1 = getAIProvider(); if (!_aiCheck1.key) return { response: `⚠️ ${_aiCheck1.name} API key not set. Add it in Settings first.` };
   if (!instruction || !instruction.trim()) return { response: 'Please enter an instruction.' };
   const response = await processStrategyCommand(config.groq, instruction.trim());
   return { response };
@@ -1128,7 +1157,7 @@ async function handleTelegramCommand(text: string) {
       const q = args.join(' ');
       if (!q) { tgSend(config.tgt, config.tgc, 'Usage: /ask &lt;question&gt;'); break; }
       tgSend(config.tgt, config.tgc, '🧠 Asking Groq AI: "' + q + '"...');
-      if (!config.groq) { tgSend(config.tgt, config.tgc, '⚠️ Groq API key not set. Add it in Settings.'); break; }
+      { const _ac = getAIProvider(); if (!_ac.key) { tgSend(config.tgt, config.tgc, `⚠️ ${_ac.name} API key not set. Add it in Settings.`); break; } }
       const answer = await askGroqQuestion(config.groq, q);
       tgSend(config.tgt, config.tgc, '🧠 <b>Groq AI says:</b>\n\n' + answer);
       break;
@@ -1222,7 +1251,7 @@ async function handleTelegramCommand(text: string) {
     case 'strategy': {
       const instruction = args.join(' ');
       if (!instruction) { tgSend(config.tgt, config.tgc, 'Usage: /strategy <instruction>\nExample: /strategy avoid shorting ETH in ranging markets'); break; }
-      if (!config.groq) { tgSend(config.tgt, config.tgc, '⚠️ Groq API key not set'); break; }
+      { const _ac = getAIProvider(); if (!_ac.key) { tgSend(config.tgt, config.tgc, `⚠️ ${_ac.name} API key not set`); break; } }
       tgSend(config.tgt, config.tgc, '🧠 Processing strategy change...');
       const response = await processStrategyCommand(config.groq, instruction);
       tgSend(config.tgt, config.tgc, '🧠 <b>Strategy Updated</b>\n\n' + response);
@@ -1267,7 +1296,7 @@ async function handleTelegramCommand(text: string) {
 
     case 'analyze': {
       if (tradeLog.length < 3) { tgSend(config.tgt, config.tgc, '⚠️ Need at least 3 trades to analyze. Keep trading!'); break; }
-      if (!config.groq) { tgSend(config.tgt, config.tgc, '⚠️ Groq API key not set'); break; }
+      { const _ac = getAIProvider(); if (!_ac.key) { tgSend(config.tgt, config.tgc, `⚠️ ${_ac.name} API key not set`); break; } }
       tgSend(config.tgt, config.tgc, '🧠 Running self-analysis on trade history...');
       await analyzeTradePerformance();
       break;
@@ -1288,9 +1317,10 @@ async function handleTelegramCommand(text: string) {
       if (text.startsWith('/')) {
         tgSend(config.tgt, config.tgc, 'Unknown command. Send /help for all commands.');
       } else {
-        // User sent a regular message — let Groq AI respond
-        if (!config.groq) {
-          tgSend(config.tgt, config.tgc, '⚠️ Groq API key not set. Add it in Settings to chat with AI.');
+        // User sent a regular message — let AI respond
+        const _aiC = getAIProvider();
+        if (!_aiC.key) {
+          tgSend(config.tgt, config.tgc, `⚠️ ${_aiC.name} API key not set. Add it in Settings to chat with AI.`);
           break;
         }
         tgSend(config.tgt, config.tgc, '🧠 Thinking...');
@@ -1315,7 +1345,7 @@ function stopTGPoll() {
 
 export function botGetSnapshot(): BotSnapshot {
   // Strip sensitive keys from config before sending to client
-  const { groq: _g, key: _k, secret: _s, ...safeConfig } = config;
+  const { groq: _g, key: _k, secret: _s, deepseek: _ds, ...safeConfig } = config;
   return {
     config: safeConfig,
     status, paused, scanCount, nextScanIn,
@@ -1348,14 +1378,15 @@ export function botSetConfig(newConfig: BotConfig) {
 }
 
 export function botStart(): { error: string | null } {
-  if (!config.groq) return { error: 'Add Groq API key in Settings' };
+  const ai = getAIProvider();
+  if (!ai.key) return { error: `Add ${ai.name} API key in Settings` };
   if (!config.paper && !config.key) return { error: 'Add Bybit API keys in Settings' };
   if (status !== 'offline') return { error: null }; // already running
 
   status = 'running';
   paused = false;
   console.log('[BotEngine] Starting bot...');
-  tgSend(config.tgt, config.tgc, `🤖 <b>ByteBot AI Started (Server-Side 24/7)</b>\nMode: ${config.paper ? '📄 PAPER TRADING (simulated)' : config.testnet ? 'TESTNET 🔵' : 'LIVE 🔴'}\nBrain: Groq llama-3.3-70b (FREE)\nMin confidence: ${config.mc || 65}%\n\nThe bot runs on the server — you can close the app.\nSend /help for commands 🚀`);
+  tgSend(config.tgt, config.tgc, `🤖 <b>ByteBot AI Started (Server-Side 24/7)</b>\nMode: ${config.paper ? '📄 PAPER TRADING (simulated)' : config.testnet ? 'TESTNET 🔵' : 'LIVE 🔴'}\nBrain: ${ai.name} (${ai.model})\nMin confidence: ${config.mc || 65}%\n\nThe bot runs on the server — you can close the app.\nSend /help for commands 🚀`);
 
   // Initial scan + ticker + news
   doScan();

@@ -182,14 +182,56 @@ export default function SettingsScreen() {
         {/* AI Brain */}
         <View style={styles.card}>
           <SectionTitle title="AI BRAIN" />
-          <InputField
-            label="Groq API Key *"
-            value={form.groq}
-            onChangeText={(t) => update("groq", t)}
-            placeholder="gsk_xxxx"
-            secureTextEntry
-            hint="Free at console.groq.com — powers all AI decisions"
-          />
+          <Text style={{ color: "#7892b8", fontSize: 11, marginBottom: 8 }}>AI Provider</Text>
+          <View style={{ flexDirection: "row", gap: 8, marginBottom: 14 }}>
+            {(["groq", "deepseek"] as const).map((prov) => {
+              const active = (form.aiProvider || "groq") === prov;
+              return (
+                <Pressable
+                  key={prov}
+                  onPress={() => update("aiProvider", prov)}
+                  style={({ pressed }) => [
+                    {
+                      flex: 1,
+                      paddingVertical: 12,
+                      borderRadius: 8,
+                      backgroundColor: active ? "#1f6feb" : "#0f1a2e",
+                      borderWidth: 1,
+                      borderColor: active ? "#3b82f6" : "#1a2840",
+                      opacity: pressed ? 0.7 : 1,
+                      alignItems: "center",
+                    },
+                  ]}
+                >
+                  <Text style={{ color: active ? "#fff" : "#9bb3d4", fontWeight: "700", fontSize: 13 }}>
+                    {prov === "groq" ? "⚡ GROQ" : "🧠 DEEPSEEK"}
+                  </Text>
+                  <Text style={{ color: active ? "#cfe1ff" : "#5f7390", fontSize: 10, marginTop: 2 }}>
+                    {prov === "groq" ? "Fast, free tier" : "Cheap, smarter"}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          {(form.aiProvider || "groq") === "groq" ? (
+            <InputField
+              label="Groq API Key *"
+              value={form.groq}
+              onChangeText={(t) => update("groq", t)}
+              placeholder="gsk_xxxx"
+              secureTextEntry
+              hint="Free at console.groq.com — fast but limited tokens/day"
+            />
+          ) : (
+            <InputField
+              label="DeepSeek API Key *"
+              value={form.deepseek || ""}
+              onChangeText={(t) => update("deepseek", t)}
+              placeholder="sk-xxxx"
+              secureTextEntry
+              hint="Get at platform.deepseek.com/api_keys — pay-as-you-go (~$0.27/M input tokens)"
+            />
+          )}
         </View>
 
         {/* Trading Mode */}

@@ -107,7 +107,7 @@ async function startServer() {
 
   server.listen(port, async () => {
     console.log(`[api] server listening on port ${port}`);
-    console.log(`[BotEngine] BUILD_VERSION=v3-groq-error-fix-2026-04-20`);
+    console.log(`[BotEngine] BUILD_VERSION=v4-multi-provider-deepseek-2026-04-20`);
     // Restore bot state from DB and auto-resume if it was running
     try {
       const { botRestoreFromDb } = await import("../bot-engine");

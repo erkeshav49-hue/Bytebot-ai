@@ -1,7 +1,11 @@
 // ─── Shared Bot Types (server + client) ─────────────────────────────────────
 
+export type AIProvider = 'groq' | 'deepseek';
+
 export interface BotConfig {
   groq: string;
+  deepseek?: string;       // DeepSeek API key
+  aiProvider?: AIProvider; // 'groq' (default) or 'deepseek'
   paper: boolean;
   key: string;
   secret: string;
@@ -112,7 +116,7 @@ export interface StrategyState {
 // ─── Bot Snapshot ───────────────────────────────────────────────────────────
 
 export interface BotSnapshot {
-  config: Omit<BotConfig, 'groq' | 'key' | 'secret'>;
+  config: Omit<BotConfig, 'groq' | 'key' | 'secret' | 'deepseek'>;
   status: BotStatus;
   paused: boolean;
   scanCount: number;
@@ -129,6 +133,8 @@ export interface BotSnapshot {
 
 export const DEFAULT_CONFIG: BotConfig = {
   groq: '',
+  deepseek: '',
+  aiProvider: 'groq',
   paper: true,
   key: '',
   secret: '',
