@@ -183,9 +183,14 @@ export default function SettingsScreen() {
         <View style={styles.card}>
           <SectionTitle title="AI BRAIN" />
           <Text style={{ color: "#7892b8", fontSize: 11, marginBottom: 8 }}>AI Provider</Text>
-          <View style={{ flexDirection: "row", gap: 8, marginBottom: 14 }}>
-            {(["groq", "deepseek"] as const).map((prov) => {
-              const active = (form.aiProvider || "groq") === prov;
+          <View style={{ flexDirection: "row", gap: 6, marginBottom: 14 }}>
+            {(["cerebras", "groq", "deepseek"] as const).map((prov) => {
+              const active = (form.aiProvider || "cerebras") === prov;
+              const labels: Record<string, { name: string; sub: string }> = {
+                cerebras: { name: "⚡ CEREBRAS", sub: "1M free/day" },
+                groq: { name: "⚡ GROQ", sub: "500K free/day" },
+                deepseek: { name: "🧠 DEEPSEEK", sub: "Paid, smart" },
+              };
               return (
                 <Pressable
                   key={prov}
@@ -193,7 +198,8 @@ export default function SettingsScreen() {
                   style={({ pressed }) => [
                     {
                       flex: 1,
-                      paddingVertical: 12,
+                      paddingVertical: 10,
+                      paddingHorizontal: 4,
                       borderRadius: 8,
                       backgroundColor: active ? "#1f6feb" : "#0f1a2e",
                       borderWidth: 1,
@@ -203,35 +209,82 @@ export default function SettingsScreen() {
                     },
                   ]}
                 >
-                  <Text style={{ color: active ? "#fff" : "#9bb3d4", fontWeight: "700", fontSize: 13 }}>
-                    {prov === "groq" ? "⚡ GROQ" : "🧠 DEEPSEEK"}
+                  <Text style={{ color: active ? "#fff" : "#9bb3d4", fontWeight: "700", fontSize: 11 }}>
+                    {labels[prov].name}
                   </Text>
-                  <Text style={{ color: active ? "#cfe1ff" : "#5f7390", fontSize: 10, marginTop: 2 }}>
-                    {prov === "groq" ? "Fast, free tier" : "Cheap, smarter"}
+                  <Text style={{ color: active ? "#cfe1ff" : "#5f7390", fontSize: 9, marginTop: 2 }}>
+                    {labels[prov].sub}
                   </Text>
                 </Pressable>
               );
             })}
           </View>
-          {(form.aiProvider || "groq") === "groq" ? (
+          {(form.aiProvider || "cerebras") === "groq" ? (
             <InputField
               label="Groq API Key *"
               value={form.groq}
               onChangeText={(t) => update("groq", t)}
               placeholder="gsk_xxxx"
               secureTextEntry
-              hint="Free at console.groq.com — fast but limited tokens/day"
+              hint="Free at console.groq.com — 500K tokens/day limit"
             />
-          ) : (
+          ) : (form.aiProvider || "cerebras") === "deepseek" ? (
             <InputField
               label="DeepSeek API Key *"
               value={form.deepseek || ""}
               onChangeText={(t) => update("deepseek", t)}
               placeholder="sk-xxxx"
               secureTextEntry
-              hint="Get at platform.deepseek.com/api_keys — pay-as-you-go (~$0.27/M input tokens)"
+              hint="platform.deepseek.com/api_keys — pay-as-you-go (~$0.27/M tokens)"
+            />
+          ) : (
+            <InputField
+              label="Cerebras API Key *"
+              value={form.cerebras || ""}
+              onChangeText={(t) => update("cerebras", t)}
+              placeholder="csk-xxxx"
+              secureTextEntry
+              hint="Free at cloud.cerebras.ai — 1M tokens/day, ultra-fast"
             />
           )}
+
+          {/* Scan Interval */}
+          <Text style={{ color: "#7892b8", fontSize: 11, marginTop: 14, marginBottom: 8 }}>Scan Interval</Text>
+          <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap" }}>
+            {[
+              { v: 30, l: "30s" },
+              { v: 60, l: "1min" },
+              { v: 120, l: "2min" },
+              { v: 300, l: "5min ⭐" },
+              { v: 600, l: "10min" },
+            ].map((opt) => {
+              const active = (form.scanInterval || 300) === opt.v;
+              return (
+                <Pressable
+                  key={opt.v}
+                  onPress={() => update("scanInterval", opt.v)}
+                  style={({ pressed }) => [
+                    {
+                      flex: 1,
+                      minWidth: 60,
+                      paddingVertical: 10,
+                      borderRadius: 6,
+                      backgroundColor: active ? "#1f6feb" : "#0f1a2e",
+                      borderWidth: 1,
+                      borderColor: active ? "#3b82f6" : "#1a2840",
+                      opacity: pressed ? 0.7 : 1,
+                      alignItems: "center",
+                    },
+                  ]}
+                >
+                  <Text style={{ color: active ? "#fff" : "#9bb3d4", fontWeight: "700", fontSize: 12 }}>{opt.l}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <Text style={{ color: "#5f7390", fontSize: 10, marginTop: 6, lineHeight: 14 }}>
+            5min recommended for free tier. Faster scans = more API calls = cost up. Restart bot after changing.
+          </Text>
         </View>
 
         {/* Trading Mode */}

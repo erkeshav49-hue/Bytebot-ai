@@ -225,6 +225,15 @@ function getAIProvider(): { name: string; url: string; model: string; key: strin
       keyHint: 'platform.deepseek.com/api_keys',
     };
   }
+  if (provider === 'cerebras') {
+    return {
+      name: 'Cerebras',
+      url: 'https://api.cerebras.ai/v1/chat/completions',
+      model: 'llama-3.3-70b',
+      key: (config.cerebras || '').trim(),
+      keyHint: 'cloud.cerebras.ai',
+    };
+  }
   return {
     name: 'Groq',
     url: 'https://api.groq.com/openai/v1/chat/completions',
@@ -1345,7 +1354,7 @@ function stopTGPoll() {
 
 export function botGetSnapshot(): BotSnapshot {
   // Strip sensitive keys from config before sending to client
-  const { groq: _g, key: _k, secret: _s, deepseek: _ds, ...safeConfig } = config;
+  const { groq: _g, key: _k, secret: _s, deepseek: _ds, cerebras: _cb, ...safeConfig } = config;
   return {
     config: safeConfig,
     status, paused, scanCount, nextScanIn,
@@ -1393,14 +1402,18 @@ export function botStart(): { error: string | null } {
   refreshTickers();
   fetchNews();
 
-  // 30-second scan cycle
-  nextScanIn = 30;
+  // Configurable scan cycle (default 30s, recommended 300s=5min for free tier)
+  const getInterval = () => {
+    const v = +(config.scanInterval || 30);
+    return v >= 10 && v <= 3600 ? v : 30; // safety bounds: 10s min, 1hr max
+  };
+  nextScanIn = getInterval();
   countdownTimer = setInterval(() => {
     if (status === 'offline') return;
     nextScanIn--;
     if (nextScanIn <= 0) {
       doScan();
-      nextScanIn = 30;
+      nextScanIn = getInterval();
     }
   }, 1000);
 

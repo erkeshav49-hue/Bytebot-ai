@@ -107,7 +107,7 @@ async function startServer() {
 
   server.listen(port, async () => {
     console.log(`[api] server listening on port ${port}`);
-    console.log(`[BotEngine] BUILD_VERSION=v4-multi-provider-deepseek-2026-04-20`);
+    console.log(`[BotEngine] BUILD_VERSION=v5-cerebras-5min-2026-04-21`);
     // Restore bot state from DB and auto-resume if it was running
     try {
       const { botRestoreFromDb } = await import("../bot-engine");

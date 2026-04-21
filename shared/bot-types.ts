@@ -1,11 +1,13 @@
 // ─── Shared Bot Types (server + client) ─────────────────────────────────────
 
-export type AIProvider = 'groq' | 'deepseek';
+export type AIProvider = 'groq' | 'deepseek' | 'cerebras';
 
 export interface BotConfig {
   groq: string;
   deepseek?: string;       // DeepSeek API key
-  aiProvider?: AIProvider; // 'groq' (default) or 'deepseek'
+  cerebras?: string;       // Cerebras API key
+  aiProvider?: AIProvider; // 'groq' (default), 'deepseek', or 'cerebras'
+  scanInterval?: number;   // seconds between scans (default 30, recommended 300=5min for free tier)
   paper: boolean;
   key: string;
   secret: string;
@@ -116,7 +118,7 @@ export interface StrategyState {
 // ─── Bot Snapshot ───────────────────────────────────────────────────────────
 
 export interface BotSnapshot {
-  config: Omit<BotConfig, 'groq' | 'key' | 'secret' | 'deepseek'>;
+  config: Omit<BotConfig, 'groq' | 'key' | 'secret' | 'deepseek' | 'cerebras'>;
   status: BotStatus;
   paused: boolean;
   scanCount: number;
@@ -134,7 +136,9 @@ export interface BotSnapshot {
 export const DEFAULT_CONFIG: BotConfig = {
   groq: '',
   deepseek: '',
-  aiProvider: 'groq',
+  cerebras: '',
+  aiProvider: 'cerebras',
+  scanInterval: 300,
   paper: true,
   key: '',
   secret: '',
