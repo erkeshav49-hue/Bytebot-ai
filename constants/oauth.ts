@@ -29,21 +29,33 @@ export const API_BASE_URL = env.apiBaseUrl;
  * Metro runs on 8081, API server runs on 3000.
  * URL pattern: https://PORT-sandboxid.region.domain
  */
+let _runtimeServerUrl: string = "";
+
+export function setRuntimeServerUrl(url: string) {
+  _runtimeServerUrl = url.trim().replace(/\/$/, "");
+}
+
+export function getRuntimeServerUrl(): string {
+  return _runtimeServerUrl;
+}
+
 export function getApiBaseUrl(): string {
-  // If API_BASE_URL is set, use it
+  // 1. Runtime override (set from AsyncStorage at app start, or changed in Settings)
+  if (_runtimeServerUrl) {
+    return _runtimeServerUrl;
+  }
+
+  // 2. Build-time env var
   if (API_BASE_URL) {
     return API_BASE_URL.replace(/\/$/, "");
   }
 
-  // On web, API is always on the same origin as the frontend
-  // (Express server proxies non-API requests to Metro in dev,
-  //  and serves the static web build in production)
+  // 3. Web: same origin
   if (ReactNative.Platform.OS === "web" && typeof window !== "undefined" && window.location) {
     const { protocol, hostname, port } = window.location;
     return `${protocol}//${hostname}${port ? `:${port}` : ""}`;
   }
 
-  // Fallback
   return "";
 }
 

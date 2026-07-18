@@ -18,6 +18,8 @@ import type { EdgeInsets, Metrics, Rect } from "react-native-safe-area-context";
 
 import { trpc, createTRPCClient } from "@/lib/trpc";
 import { initManusRuntime, subscribeSafeAreaInsets } from "@/lib/_core/manus-runtime";
+import { getStoredServerUrl } from "@/lib/server-url";
+import { setRuntimeServerUrl } from "@/constants/oauth";
 
 const DEFAULT_WEB_INSETS: EdgeInsets = { top: 0, right: 0, bottom: 0, left: 0 };
 const DEFAULT_WEB_FRAME: Rect = { x: 0, y: 0, width: 0, height: 0 };
@@ -32,6 +34,16 @@ export default function RootLayout() {
 
   const [insets, setInsets] = useState<EdgeInsets>(initialInsets);
   const [frame, setFrame] = useState<Rect>(initialFrame);
+  const [serverUrlReady, setServerUrlReady] = useState(false);
+  const [trpcKey, setTrpcKey] = useState(0);
+
+  // Load stored server URL before creating tRPC client
+  useEffect(() => {
+    getStoredServerUrl().then((url) => {
+      if (url) setRuntimeServerUrl(url);
+      setServerUrlReady(true);
+    });
+  }, []);
 
   // Initialize Manus runtime for cookie injection from parent container
   useEffect(() => {
@@ -49,7 +61,6 @@ export default function RootLayout() {
     return () => unsubscribe();
   }, [handleSafeAreaUpdate]);
 
-  // Create clients once and reuse them
   const [queryClient] = useState(
     () =>
       new QueryClient({
@@ -61,7 +72,17 @@ export default function RootLayout() {
         },
       }),
   );
-  const [trpcClient] = useState(() => createTRPCClient());
+
+  // Recreate tRPC client when trpcKey changes (after server URL update)
+  const trpcClient = useMemo(() => createTRPCClient(), [trpcKey]);
+
+  // Expose a global function so Settings screen can trigger a client refresh
+  useEffect(() => {
+    (global as any).__bytebotRefreshTrpc = () => setTrpcKey((k) => k + 1);
+    return () => { delete (global as any).__bytebotRefreshTrpc; };
+  }, []);
+
+  if (!serverUrlReady) return null;
 
   // Ensure minimum 8px padding for top and bottom on mobile
   const providerInitialMetrics = useMemo(() => {

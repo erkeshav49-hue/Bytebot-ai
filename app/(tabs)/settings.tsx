@@ -5,6 +5,8 @@ import { ScreenContainer } from "@/components/screen-container";
 import { trpc } from "@/lib/trpc";
 import type { BotConfig } from "@/shared/bot-types";
 import { DEFAULT_CONFIG, SUPPORTED_COINS } from "@/shared/bot-types";
+import { getStoredServerUrl, saveServerUrl } from "@/lib/server-url";
+import { setRuntimeServerUrl, getApiBaseUrl } from "@/constants/oauth";
 
 const PRESETS: Record<string, { sz: number; lv: number; tp: number; sl: number }> = {
   low: { sz: 10, lv: 3, tp: 0.3, sl: 0.15 },
@@ -68,6 +70,38 @@ export default function SettingsScreen() {
 
   const [form, setForm] = useState<BotConfig>({ ...DEFAULT_CONFIG });
   const [initialized, setInitialized] = useState(false);
+
+  // Server URL state
+  const [serverUrl, setServerUrl] = useState("");
+  const [serverUrlSaving, setServerUrlSaving] = useState(false);
+
+  useEffect(() => {
+    getStoredServerUrl().then((url) => setServerUrl(url));
+  }, []);
+
+  const handleSaveServerUrl = useCallback(async () => {
+    if (!serverUrl.trim()) {
+      Alert.alert("Error", "Please enter a valid server URL");
+      return;
+    }
+    const clean = serverUrl.trim().replace(/\/$/, "");
+    if (!clean.startsWith("http")) {
+      Alert.alert("Error", "URL must start with http:// or https://");
+      return;
+    }
+    setServerUrlSaving(true);
+    try {
+      await saveServerUrl(clean);
+      setRuntimeServerUrl(clean);
+      if ((global as any).__bytebotRefreshTrpc) (global as any).__bytebotRefreshTrpc();
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert("✅ Saved", `Server URL saved!\n${clean}\n\nApp is now connected to your server.`);
+    } catch (e: any) {
+      Alert.alert("Error", e?.message || "Failed to save");
+    } finally {
+      setServerUrlSaving(false);
+    }
+  }, [serverUrl]);
 
   useEffect(() => {
     if (serverConfig && !initialized) {
@@ -179,6 +213,44 @@ export default function SettingsScreen() {
         </View>
       </View>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 14, paddingBottom: 120, paddingTop: 12 }}>
+        {/* Server URL */}
+        <View style={styles.card}>
+          <SectionTitle title="🌐 SERVER URL" />
+          <Text style={{ color: "#7892b8", fontSize: 11, marginBottom: 10 }}>
+            Current: {getApiBaseUrl() || "Not set"}
+          </Text>
+          <View style={styles.fieldGroup}>
+            <Text style={styles.fieldLabel}>Backend Server URL</Text>
+            <TextInput
+              style={styles.fieldInput}
+              value={serverUrl}
+              onChangeText={setServerUrl}
+              placeholder="https://your-server.railway.app"
+              placeholderTextColor="#3d5470"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+            />
+            <Text style={styles.fieldHint}>Deploy backend on Railway/Render (free) → paste URL here</Text>
+          </View>
+          <Pressable
+            onPress={handleSaveServerUrl}
+            disabled={serverUrlSaving}
+            style={({ pressed }) => ({
+              backgroundColor: "#1f6feb",
+              borderRadius: 8,
+              paddingVertical: 10,
+              alignItems: "center",
+              opacity: pressed || serverUrlSaving ? 0.7 : 1,
+              marginTop: 4,
+            })}
+          >
+            <Text style={{ color: "#fff", fontWeight: "700", fontSize: 13 }}>
+              {serverUrlSaving ? "Saving..." : "💾 Save & Connect"}
+            </Text>
+          </Pressable>
+        </View>
+
         {/* AI Brain */}
         <View style={styles.card}>
           <SectionTitle title="AI BRAIN" />
