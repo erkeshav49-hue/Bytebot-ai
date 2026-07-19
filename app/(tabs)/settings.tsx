@@ -191,19 +191,6 @@ export default function SettingsScreen() {
     }
   }, [resetMutation]);
 
-  if (isLoading) {
-    return (
-      <ScreenContainer containerClassName="bg-background">
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Settings</Text>
-        </View>
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator size="large" color="#00f5a0" />
-        </View>
-      </ScreenContainer>
-    );
-  }
-
   return (
     <ScreenContainer containerClassName="bg-background">
       <View style={styles.header}>
@@ -213,7 +200,7 @@ export default function SettingsScreen() {
         </View>
       </View>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 14, paddingBottom: 120, paddingTop: 12 }}>
-        {/* Server URL */}
+        {/* Server URL — always visible even when backend is unreachable */}
         <View style={styles.card}>
           <SectionTitle title="🌐 SERVER URL" />
           <Text style={{ color: "#7892b8", fontSize: 11, marginBottom: 10 }}>
@@ -250,6 +237,14 @@ export default function SettingsScreen() {
             </Text>
           </Pressable>
         </View>
+
+        {/* Connection status banner */}
+        {isLoading && (
+          <View style={{ backgroundColor: "#0f1a2e", borderRadius: 10, padding: 12, marginBottom: 10, flexDirection: "row", alignItems: "center", gap: 10, borderWidth: 1, borderColor: "#1a2840" }}>
+            <ActivityIndicator size="small" color="#f59e0b" />
+            <Text style={{ color: "#f59e0b", fontSize: 12, flex: 1 }}>⚠️ Server se connect nahi ho pa raha. Upar Railway URL daalo aur Save karo.</Text>
+          </View>
+        )}
 
         {/* AI Brain */}
         <View style={styles.card}>
